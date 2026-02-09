@@ -1,16 +1,28 @@
 import { Bot, Context } from "grammy";
+import { splitMessage } from "./splitMessage";
 
 /**
  * Creates and configures a grammY Bot instance.
  *
- * The bot logs every incoming message with its full shape so we can
- * understand the Telegram data structures during Phase 1 exploration.
+ * The bot:
+ * - Responds to /start with a welcome message
+ * - Logs every incoming message with its full shape
+ * - Echoes text messages back (for testing response sending)
  */
 export function createBot(token: string): Bot {
   const bot = new Bot(token);
 
-  // Log every incoming message with full detail
-  bot.on("message", (ctx: Context) => {
+  // /start command — welcome message
+  bot.command("start", async (ctx: Context) => {
+    await ctx.reply(
+      "Hello! I'm the multi-tenant Telegram daemon bot.\n" +
+        "Send me any message and I'll echo it back.\n\n" +
+        "This is a Phase 1 test bot for exploring the Telegram API."
+    );
+  });
+
+  // Log every incoming message with full detail, then echo it back
+  bot.on("message", async (ctx: Context) => {
     const msg = ctx.message!;
 
     console.log("\n========== INCOMING MESSAGE ==========");
@@ -26,6 +38,14 @@ export function createBot(token: string): Bot {
     console.log("\n--- Full message object ---");
     console.log(JSON.stringify(msg, null, 2));
     console.log("===========================================\n");
+
+    // Echo text messages back, handling long messages with splitting
+    if (msg.text) {
+      const chunks = splitMessage(msg.text);
+      for (const chunk of chunks) {
+        await ctx.reply(chunk);
+      }
+    }
   });
 
   return bot;
