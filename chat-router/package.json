@@ -1,0 +1,20 @@
+{
+  "name": "chat-router",
+  "version": "0.1.0",
+  "description": "Multi-process chat routing system — central router daemon",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "private": true,
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.2",
+    "vitest": "^3.0.5",
+    "@types/node": "^22.12.0"
+  }
+}
