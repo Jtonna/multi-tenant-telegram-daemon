@@ -12,6 +12,9 @@ dist/
 # Source maps
 *.js.map
 
+# Runtime data
+data/
+
 # OS files
 .DS_Store
 Thumbs.db
