@@ -1,5 +1,6 @@
 import { Bot, Context } from "grammy";
 import { splitMessage } from "./splitMessage";
+import { ChatRouterClient, mapTelegramToInbound } from "./chatRouterClient";
 
 /**
  * Creates and configures a grammY Bot instance.
@@ -7,9 +8,10 @@ import { splitMessage } from "./splitMessage";
  * The bot:
  * - Responds to /start with a welcome message
  * - Logs every incoming message with its full shape
+ * - Optionally forwards messages to the chat router
  * - Echoes text messages back (for testing response sending)
  */
-export function createBot(token: string): Bot {
+export function createBot(token: string, chatRouter?: ChatRouterClient): Bot {
   const bot = new Bot(token);
 
   // /start command — welcome message
@@ -38,6 +40,17 @@ export function createBot(token: string): Bot {
     console.log("\n--- Full message object ---");
     console.log(JSON.stringify(msg, null, 2));
     console.log("===========================================\n");
+
+    // Forward to chat router if configured
+    if (chatRouter) {
+      try {
+        const inbound = mapTelegramToInbound(ctx);
+        await chatRouter.ingestMessage(inbound);
+        console.log("  -> Forwarded to chat-router");
+      } catch (err) {
+        console.error("  -> Failed to forward to chat-router:", err);
+      }
+    }
 
     // Echo text messages back, handling long messages with splitting
     if (msg.text) {

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { createBot } from "./bot";
+import { ChatRouterClient } from "./chatRouterClient";
 
 const token = process.env.BOT_TOKEN;
 
@@ -9,7 +10,17 @@ if (!token) {
   process.exit(1);
 }
 
-const bot = createBot(token);
+const chatRouterUrl = process.env.CHAT_ROUTER_URL;
+let chatRouter: ChatRouterClient | undefined;
+
+if (chatRouterUrl) {
+  chatRouter = new ChatRouterClient(chatRouterUrl);
+  console.log(`Chat router configured: ${chatRouterUrl}`);
+} else {
+  console.log("CHAT_ROUTER_URL not set — running in standalone mode (echo only)");
+}
+
+const bot = createBot(token, chatRouter);
 
 // Graceful shutdown
 function shutdown(signal: string) {
