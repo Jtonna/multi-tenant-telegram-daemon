@@ -47,9 +47,9 @@ The mapper function (mapTelegramToInbound) is the critical translation layer bet
 
 The mapper lives in the plugin, not in the chat router. Each plugin is responsible for mapping its own platform's data into the normalized format. The chat router never imports platform-specific types.
 
-## Fire-and-Forget Forwarding
+## Resilient Forwarding
 
-The plugin's forwarding to the chat router is designed to be resilient. If the HTTP request to the chat router fails for any reason (server down, network error, validation error), the plugin catches the error, logs it, and continues processing. The Telegram echo is not blocked or prevented by a chat router failure.
+The plugin's forwarding to the chat router is awaited but wrapped in a try-catch, making it resilient to failures. If the HTTP request to the chat router fails for any reason (server down, network error, validation error), the plugin catches the error, logs it, and continues processing. The echo step waits for forwarding to complete or fail before running, but a forwarding failure does not prevent the echo.
 
 This means the plugin can start before the chat router is running, and it will function normally (in standalone echo mode) until the chat router becomes available. There is no startup dependency between the two processes.
 
