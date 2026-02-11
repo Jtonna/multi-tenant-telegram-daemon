@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import Database from "better-sqlite3";
 import type {
   Platform,
@@ -44,6 +46,14 @@ export class ChatRouterStore {
 
   /** Create tables / indexes (idempotent) and open the database. */
   init(): void {
+    // Ensure the parent directory exists for file-based databases.
+    if (this.dbPath !== ":memory:") {
+      const dir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
+
     this.db = new Database(this.dbPath);
 
     // Enable WAL mode for file-based databases for better concurrency.
@@ -211,55 +221,63 @@ export class ChatRouterStore {
 
   /**
    * Timeline entries for a specific conversation, ordered by ID descending.
-   * Supports cursor pagination via `before` (entries with id < before).
+   * Supports cursor pagination via `after` (id > after) and `before` (id < before).
    */
   getTimeline(
     platform: Platform,
     platformChatId: string,
+    after?: number,
     before?: number,
     limit: number = 50,
   ): TimelineEntry[] {
     const db = this.getDb();
+    const conditions = ["platform = ?", "platform_chat_id = ?"];
+    const params: unknown[] = [platform, platformChatId];
 
+    if (after !== undefined) {
+      conditions.push("id > ?");
+      params.push(after);
+    }
     if (before !== undefined) {
-      const stmt = db.prepare(`
-        SELECT * FROM timeline
-        WHERE platform = ? AND platform_chat_id = ? AND id < ?
-        ORDER BY id DESC
-        LIMIT ?
-      `);
-      return stmt.all(platform, platformChatId, before, limit).map(rowToTimelineEntry);
+      conditions.push("id < ?");
+      params.push(before);
     }
 
+    params.push(limit);
+    const where = conditions.join(" AND ");
     const stmt = db.prepare(`
       SELECT * FROM timeline
-      WHERE platform = ? AND platform_chat_id = ?
+      WHERE ${where}
       ORDER BY id DESC
       LIMIT ?
     `);
-    return stmt.all(platform, platformChatId, limit).map(rowToTimelineEntry);
+    return stmt.all(...params).map(rowToTimelineEntry);
   }
 
   /** All timeline entries ordered by ID descending with cursor pagination. */
-  getUnifiedTimeline(before?: number, limit: number = 50): TimelineEntry[] {
+  getUnifiedTimeline(after?: number, before?: number, limit: number = 50): TimelineEntry[] {
     const db = this.getDb();
+    const conditions: string[] = [];
+    const params: unknown[] = [];
 
+    if (after !== undefined) {
+      conditions.push("id > ?");
+      params.push(after);
+    }
     if (before !== undefined) {
-      const stmt = db.prepare(`
-        SELECT * FROM timeline
-        WHERE id < ?
-        ORDER BY id DESC
-        LIMIT ?
-      `);
-      return stmt.all(before, limit).map(rowToTimelineEntry);
+      conditions.push("id < ?");
+      params.push(before);
     }
 
+    params.push(limit);
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const stmt = db.prepare(`
       SELECT * FROM timeline
+      ${where}
       ORDER BY id DESC
       LIMIT ?
     `);
-    return stmt.all(limit).map(rowToTimelineEntry);
+    return stmt.all(...params).map(rowToTimelineEntry);
   }
 
   /** List conversations ordered by lastMessageAt descending. */

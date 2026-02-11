@@ -100,7 +100,7 @@ describe("ChatRouterStore", () => {
     expect(all[4].id).toBe(1);
 
     // Cursor: entries before id 4
-    const page = store.getTimeline("telegram", "chat-100", 4, 2);
+    const page = store.getTimeline("telegram", "chat-100", undefined, 4, 2);
     expect(page).toHaveLength(2);
     expect(page[0].id).toBe(3);
     expect(page[1].id).toBe(2);
