@@ -32,12 +32,14 @@ export function createApiRouter(service: IChatRouterService): Router {
   router.get("/timeline/:platform/:chatId", (req: Request, res: Response) => {
     const platform = req.params.platform as string;
     const chatId = req.params.chatId as string;
+    const after = req.query.after ? Number(req.query.after) : undefined;
     const before = req.query.before ? Number(req.query.before) : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
 
     const entries = service.getTimeline({
       platform: platform as Platform,
       platformChatId: chatId,
+      after,
       before,
       limit,
     });
@@ -47,10 +49,11 @@ export function createApiRouter(service: IChatRouterService): Router {
 
   // GET /timeline — unified timeline across all platforms
   router.get("/timeline", (req: Request, res: Response) => {
+    const after = req.query.after ? Number(req.query.after) : undefined;
     const before = req.query.before ? Number(req.query.before) : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
 
-    const entries = service.getUnifiedTimeline({ before, limit });
+    const entries = service.getUnifiedTimeline({ after, before, limit });
     res.status(200).json(entries);
   });
 

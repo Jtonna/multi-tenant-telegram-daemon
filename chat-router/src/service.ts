@@ -89,22 +89,25 @@ export class ChatRouterService implements IChatRouterService {
   getTimeline(params: {
     platform: Platform;
     platformChatId: string;
+    after?: number;
     before?: number;
     limit?: number;
   }): TimelineEntry[] {
     return this.store.getTimeline(
       params.platform,
       params.platformChatId,
+      params.after,
       params.before,
       params.limit,
     );
   }
 
   getUnifiedTimeline(params: {
+    after?: number;
     before?: number;
     limit?: number;
   }): TimelineEntry[] {
-    return this.store.getUnifiedTimeline(params.before, params.limit);
+    return this.store.getUnifiedTimeline(params.after, params.before, params.limit);
   }
 
   listConversations(params?: {
