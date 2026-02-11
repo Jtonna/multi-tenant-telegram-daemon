@@ -7,7 +7,7 @@ The chat router is organized into four layers, each with a single responsibility
 1. **Types** -- Defines all data structures and the service interface contract. Every other layer depends on types but types depend on nothing.
 2. **Store** -- Persistence layer that reads and writes timeline entries and conversations. Currently backed by a JSON file; designed to be swappable for SQLite without changing any other layer.
 3. **Service** -- All business logic. Validates inputs, orchestrates store operations, and provides the methods that transport adapters call. This is the source of truth for the system's behavior.
-4. **REST API** -- A thin Express-based HTTP adapter that translates HTTP requests into service method calls. Contains no business logic of its own.
+4. **REST API** -- A thin Express-based HTTP adapter that translates HTTP requests into service method calls. Contains no business logic of its own. The `createServer()` factory returns an Express app without calling `.listen()`, keeping the server testable with supertest. The entry point in `index.ts` is responsible for calling `.listen()`.
 
 Each layer only depends on the one below it. The REST API calls the service, the service calls the store, and the store manages its own internal state.
 
@@ -30,8 +30,8 @@ When a message arrives via the REST API:
 1. The Express router receives the HTTP POST request and parses the JSON body.
 2. The router calls service.ingestMessage() with the parsed InboundMessage.
 3. The service validates all required fields (platform, message ID, chat ID, sender name, sender ID, timestamp). If any are missing, it throws an error which the router translates to HTTP 400.
-4. The service maps the inbound message to a TimelineEntry (adding direction "in", serializing platformMeta to JSON, and assigning nullable fields).
-5. The service calls store.ingestTransaction(), which atomically inserts the timeline entry and upserts the conversation record (creating it on first message, incrementing messageCount on subsequent messages).
+4. The service maps the inbound message to a TimelineEntry (adding direction "in", converting the platformMeta object to a JSON string via JSON.stringify, and assigning nullable fields).
+5. The service calls store.ingestTransaction(), which sequentially inserts the timeline entry and upserts the conversation record (creating it on first message, or incrementing messageCount, updating lastMessageAt, overwriting the label, and conditionally updating platformChatType on subsequent messages). Each step triggers a separate persist to disk.
 6. The store assigns an auto-increment ID and createdAt timestamp, then returns the completed TimelineEntry.
 7. The service returns the TimelineEntry to the router, which sends it as HTTP 201 JSON.
 
@@ -47,7 +47,7 @@ All messages are normalized to a common format regardless of which platform they
 
 **OutboundMessage** represents a response that should be delivered back to a platform. It contains the timeline entry ID, target platform and chat ID, response text, and an optional reference to the message being replied to.
 
-**Conversation** tracks unique platform-plus-chat-ID pairs. It is created automatically when the first message from a new chat arrives. It stores a display label, first-seen and last-message timestamps, and a running message count. Conversations are never explicitly created or deleted by API callers.
+**Conversation** tracks unique platform-plus-chat-ID pairs. It is created automatically when the first message from a new chat arrives. It stores a display label, a platformChatType (e.g., "private", "group"), first-seen and last-message timestamps, and a running message count. Conversations are never explicitly created or deleted by API callers.
 
 ## Platform Abstraction
 
@@ -62,7 +62,7 @@ The chat router never interprets platformMeta. It stores and returns it as-is. T
 
 The current store is a JSON file that holds all timeline entries and conversations in memory, flushing to disk after each mutation. It supports an in-memory mode (used in tests) where no file I/O occurs.
 
-The store maintains its own auto-increment counters for timeline entry IDs and conversation IDs. The ingest operation (insert timeline entry plus upsert conversation) is performed as a single logical transaction.
+The store maintains its own auto-increment counters for timeline entry IDs and conversation IDs (both starting at 1). The ingest operation (insert timeline entry plus upsert conversation) is performed as two sequential steps, each persisting to disk separately. It is not truly atomic -- a crash between the two writes could leave state inconsistent.
 
 The store interface is designed so that a future SQLite implementation would expose the same methods with the same signatures. The service layer would require no changes for this swap.
 

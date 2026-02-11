@@ -11,7 +11,7 @@ The chat router runs as its own process. Plugins and external clients are separa
 The chat router currently provides three functional layers:
 
 - **Service layer** -- All business logic for ingesting messages, recording responses, querying timelines, and managing conversations. The service validates inputs, normalizes data, and delegates to the persistence layer.
-- **REST API** -- An Express-based HTTP server that exposes seven endpoints for submitting messages, retrieving timelines, listing conversations, and checking system health. All endpoints are mounted under the "/api" prefix.
+- **REST API** -- An Express-based HTTP server that exposes seven endpoints for submitting messages, recording responses, retrieving timelines, listing conversations, and checking system health. All endpoints are mounted under the "/api" prefix.
 - **JSON file persistence** -- A file-backed store that keeps all timeline entries and conversations in a single JSON file on disk. It supports an in-memory mode for testing.
 
 The system supports three platform types: Telegram, Discord, and web. Messages from any platform are normalized into the same data model and stored in a single unified timeline.

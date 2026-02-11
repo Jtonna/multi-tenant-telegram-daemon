@@ -20,18 +20,18 @@ The bot registers two handlers:
 - A command handler for /start that sends a welcome message.
 - A message handler that processes every incoming message: logs it, optionally forwards it to the chat router, and echoes the text back.
 
-The message handler runs for all message types, but only text messages are forwarded and echoed. Non-text messages (photos, stickers, etc.) are logged but otherwise ignored in the current implementation.
+The message handler runs for all message types. All messages are logged and forwarded to the chat router (if configured), regardless of whether they contain text. Only text messages are echoed back. Non-text messages (photos, stickers, etc.) are logged and forwarded but receive no echo reply.
 
 ## Message Flow
 
 When a user sends a message to the Telegram bot:
 
 1. grammY receives the message via long polling and invokes the message handler with a Context object.
-2. The handler logs the message details to the console (message ID, chat ID, chat type, sender info, timestamp, text).
+2. The handler logs the message details to the console (wall-clock timestamp, message ID, chat ID, chat type, sender info, message timestamp, text), plus the full raw message object as JSON.
 3. If a ChatRouterClient is configured, the handler calls mapTelegramToInbound to convert the grammY Context into the chat router's normalized InboundMessage format, then sends it to the chat router via HTTP POST.
 4. If the message contains text, the handler splits it if necessary (for messages over 4096 characters) and echoes each chunk back as a Telegram reply.
 
-Steps 3 and 4 are independent. If the chat router is down or the forwarding fails, the echo still happens. If the message has no text, no echo is sent but the forward still occurs.
+Steps 3 and 4 are failure-independent -- if the chat router is down or forwarding fails, the echo still happens. However, they execute sequentially: the forwarding step uses `await`, so the echo does not begin until forwarding either completes or the catch block handles the error. Forwarding runs for all message types regardless of whether text is present; the echo only runs when text exists.
 
 ## The Mapper Pattern
 
