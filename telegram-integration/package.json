@@ -1,0 +1,27 @@
+{
+  "name": "multi-tenant-telegram-daemon",
+  "version": "0.1.0",
+  "description": "Multi-process chat routing system — Telegram plugin",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "grammy": "^1.35.0",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.2",
+    "vitest": "^3.0.5",
+    "@types/node": "^22.12.0"
+  }
+}
