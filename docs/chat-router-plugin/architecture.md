@@ -11,68 +11,109 @@ The Telegram plugin runs as its own Node.js process, completely independent of t
 
 The plugin communicates with the chat router exclusively through its REST API. There are no shared dependencies, no shared database, and no in-process imports between the two packages.
 
-## The grammY Bot
+The overall architecture is a **multi-process plugin architecture** where each plugin is a standalone process that communicates with the chat router over HTTP. It is not MVC, not event-driven in the pub/sub sense, and not microservices. Within the plugin itself, the internal structure follows the design patterns described below.
 
-The plugin uses grammY, a Telegram Bot API framework for Node.js. It connects to Telegram using long polling, which means the bot continuously asks Telegram's servers for new messages. This approach requires no inbound network configuration (no webhook URL, no SSL certificate, no public-facing server).
+## Design Patterns
 
-The bot registers two handlers:
+The codebase employs five identifiable design patterns:
 
-- A command handler for /start that sends a welcome message.
-- A message handler that processes every incoming message: logs it, optionally forwards it to the chat router, and echoes the text back.
+1. **Factory Function** -- `createBot(token, chatRouter?)` in `bot.ts` is a factory function. It constructs, configures, and returns a fully-wired `Bot` instance without starting it. The caller (`index.ts`) controls lifecycle separately. This is not a class with a constructor; it is a plain function that returns a configured object.
 
-The message handler runs for all message types. All messages are logged and forwarded to the chat router (if configured), regardless of whether they contain text. Only text messages are echoed back. Non-text messages (photos, stickers, etc.) are logged and forwarded but receive no echo reply.
+2. **Adapter / Mapper** -- `mapTelegramToInbound()` in `chatRouterClient.ts` is a structural adapter. It translates between two incompatible interfaces (grammY's `Context` and the chat router's `InboundMessage`). The mapper lives in the plugin, not in the chat router, so each platform plugin owns its own adapter. In DDD terminology, this also serves as an Anti-Corruption Layer, preventing Telegram-specific types from leaking into the chat router.
+
+3. **HTTP Client Wrapper** -- `ChatRouterClient` in `chatRouterClient.ts` is a thin client class that encapsulates HTTP transport details (URL construction, fetch calls, error checking) behind a domain-specific interface (`ingestMessage`, `healthCheck`). This isolates the bot from transport concerns.
+
+4. **Optional Dependency Injection** -- `createBot` accepts an optional `ChatRouterClient` parameter. When present, forwarding is active; when absent, forwarding is skipped. This is constructor-style DI (passed at creation time), not runtime DI. It produces two operating modes (standalone vs connected) without any conditional configuration files or feature flags.
+
+5. **Composition Root / Entry Point** -- `index.ts` is the composition root. It reads environment variables, decides which dependencies to create, wires them together via the factory function, and starts the process. No business logic lives here. This is the only file that touches `process.env`, `process.exit`, or signal handlers.
+
+## File Structure
+
+```
+telegram-integration/
+  package.json              -- Project metadata, scripts (dev/build/start/test), dependencies
+  src/
+    index.ts                -- Composition root: reads env vars, wires dependencies, starts bot
+    bot.ts                  -- Factory function createBot(): creates and configures grammY Bot
+    chatRouterClient.ts     -- ChatRouterClient class (HTTP client) + mapTelegramToInbound() mapper
+                               + InboundMessage interface (locally redeclared)
+    splitMessage.ts         -- splitMessage() utility: breaks long text at newline boundaries
+    __tests__/
+      bot.test.ts           -- 3 tests: Bot instance creation, handler registration, empty token
+      chatRouterClient.test.ts -- 10 tests: mapper field-by-field validation with mock Context
+      splitMessage.test.ts  -- 9 tests: edge cases for the splitting algorithm
+```
+
+## Data Flow
+
+```mermaid
+graph LR
+    TG[Telegram API] -->|long polling| Bot["bot.ts\ncreateBot"]
+    Bot -->|ctx| Mapper["chatRouterClient.ts\nmapTelegramToInbound"]
+    Mapper -->|InboundMessage| Client["chatRouterClient.ts\nChatRouterClient"]
+    Client -->|HTTP POST /api/messages| CR[Chat Router]
+    Bot -->|msg.text| Split["splitMessage.ts\nsplitMessage"]
+    Split -->|chunks| Bot
+    Bot -->|ctx.reply| TG
+    Entry["index.ts\ncomposition root"] -->|creates and wires| Bot
+    Entry -->|creates if URL set| Client
+```
+
+```mermaid
+graph TB
+    subgraph "Telegram Plugin Process"
+        index.ts --> bot.ts
+        bot.ts --> chatRouterClient.ts
+        bot.ts --> splitMessage.ts
+    end
+    subgraph "Chat Router Process"
+        REST["REST API<br/>/api/messages"]
+    end
+    chatRouterClient.ts -->|HTTP| REST
+```
 
 ## Message Flow
 
 When a user sends a message to the Telegram bot:
 
 1. grammY receives the message via long polling and invokes the message handler with a Context object.
-2. The handler logs the message details to the console (wall-clock timestamp, message ID, chat ID, chat type, sender info, message timestamp, text), plus the full raw message object as JSON.
-3. If a ChatRouterClient is configured, the handler calls mapTelegramToInbound to convert the grammY Context into the chat router's normalized InboundMessage format, then sends it to the chat router via HTTP POST.
-4. If the message contains text, the handler splits it if necessary (for messages over 4096 characters) and echoes each chunk back as a Telegram reply.
+2. The handler logs message details to the console (wall-clock timestamp, message ID, chat ID, chat type, sender info, message timestamp, text), plus the full raw message object as JSON.
+3. If a ChatRouterClient is configured, the handler maps the grammY Context into the chat router's normalized InboundMessage format and sends it via HTTP POST. This runs for all message types, regardless of whether text is present.
+4. If the message contains text, the handler splits it if necessary and echoes each chunk back as a Telegram reply.
 
-Steps 3 and 4 are failure-independent -- if the chat router is down or forwarding fails, the echo still happens. However, they execute sequentially: the forwarding step uses `await`, so the echo does not begin until forwarding either completes or the catch block handles the error. Forwarding runs for all message types regardless of whether text is present; the echo only runs when text exists.
+Steps 3 and 4 are failure-independent: if forwarding fails, the echo still happens. However, they execute sequentially -- the echo does not begin until forwarding either completes or fails. See [Message Handler](implementation.md#message-handler) for the full step-by-step behavior.
 
 ## The Mapper Pattern
 
-The mapper function (mapTelegramToInbound) is the critical translation layer between Telegram's data model and the chat router's normalized format. It handles several key conversions:
+The mapper function (`mapTelegramToInbound`) is the translation layer between Telegram's data model and the chat router's normalized format. Each plugin owns its own mapper; the chat router never imports platform-specific types.
 
-**ID normalization**: Telegram uses numeric IDs for messages, chats, and users. The chat router expects string IDs (to accommodate platforms like Discord that use non-numeric snowflake IDs). The mapper converts all numeric IDs to strings.
+The mapper handles four categories of transformation: ID normalization (numeric to string), timestamp conversion (seconds to milliseconds), name construction (first/last name concatenation), and platform metadata extraction (chat title, username, bot flag). See [The Mapper Function](implementation.md#the-mapper-function) for the field-by-field transformation details.
 
-**Timestamp conversion**: Telegram provides timestamps as Unix seconds. The chat router expects Unix milliseconds. The mapper multiplies by 1000.
+## The grammY Bot
 
-**Name construction**: Telegram provides first_name and optional last_name as separate fields. The mapper concatenates them with a space, filtering out undefined values.
+The plugin uses grammY, a Telegram Bot API framework for Node.js. It connects to Telegram using long polling, meaning the bot continuously asks Telegram's servers for new messages. This approach requires no inbound network configuration -- no webhook URL, no SSL certificate, no public-facing server.
 
-**Platform metadata**: The mapper extracts Telegram-specific fields that might be useful later (chat title for groups, sender username, whether the sender is a bot) and packages them into the platformMeta bag. The chat router stores this as opaque JSON without interpreting it.
-
-The mapper lives in the plugin, not in the chat router. Each plugin is responsible for mapping its own platform's data into the normalized format. The chat router never imports platform-specific types.
+The bot registers two handlers: a `/start` command handler and a general message handler. See [Command Handlers](implementation.md#command-handlers) and [Message Handler](implementation.md#message-handler) for details on what each handler does.
 
 ## Resilient Forwarding
 
-The plugin's forwarding to the chat router is awaited but wrapped in a try-catch, making it resilient to failures. If the HTTP request to the chat router fails for any reason (server down, network error, validation error), the plugin catches the error, logs it, and continues processing. The echo step waits for forwarding to complete or fail before running, but a forwarding failure does not prevent the echo.
-
-This means the plugin can start before the chat router is running, and it will function normally (in standalone echo mode) until the chat router becomes available. There is no startup dependency between the two processes.
+The plugin has no startup dependency on the chat router. It can start before the chat router is running and will function normally in standalone echo mode until the chat router becomes available. Forwarding failures are isolated: if the HTTP request to the chat router fails for any reason, the error is logged and the bot continues processing. The two processes are failure-independent by design. See [Error Handling](implementation.md#error-handling) for the implementation mechanism.
 
 ## Message Splitting
 
-Telegram imposes a 4096-character limit on message text. The splitMessage utility handles this by breaking long messages into chunks:
-
-- If a message is within the limit, it is returned as-is in a single-element array.
-- If it exceeds the limit, the utility looks for the last newline character within the allowed length and splits there, preserving readability.
-- If no newline is found within the window, it hard-splits at the maximum length.
-- The process repeats on the remaining text until everything fits.
-
-This utility is used when echoing messages back. It is not needed for forwarding to the chat router, since the chat router has no message length limit.
+Telegram imposes a 4096-character limit on message text. The `splitMessage` utility handles this by breaking long messages into chunks, preferring newline boundaries for readability. This utility is used when echoing messages back; it is not needed for forwarding to the chat router, which has no message length limit. See [The splitMessage Utility](implementation.md#the-splitmessage-utility) for the algorithm steps.
 
 ## Configuration and Modes
 
 The plugin's behavior is controlled by two environment variables:
 
-**BOT_TOKEN** is required. Without it, the process exits immediately with an error message.
+| Environment Variable | Required | Description |
+|---|---|---|
+| BOT_TOKEN | Yes | Telegram bot token from BotFather. Without it, the process exits immediately with an error message. |
+| CHAT_ROUTER_URL | No | Base URL of the chat router REST API (e.g., `http://localhost:3100`). Its presence or absence determines the operating mode. |
 
-**CHAT_ROUTER_URL** is optional. Its presence or absence determines the plugin's operating mode:
+**Connected mode**: When `CHAT_ROUTER_URL` is set, the plugin creates an HTTP client and forwards all messages to the chat router.
 
-- When set (e.g., http://localhost:3100), the plugin creates an HTTP client and operates in connected mode, forwarding all messages.
-- When absent, the plugin operates in standalone mode with no chat router interaction.
+**Standalone mode**: When `CHAT_ROUTER_URL` is absent, the plugin operates as a simple echo bot with no chat router interaction.
 
 The mode is determined at startup and logged to the console. There is no runtime switching between modes.

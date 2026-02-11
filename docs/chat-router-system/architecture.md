@@ -1,76 +1,115 @@
 # Chat Router System: Architecture
 
+## Design Pattern: Layered Architecture with Service Layer
+
+The chat router follows a **Layered Architecture** organized around a central **Service Layer** (also known as the Application Service pattern). The service layer contains all business logic and defines a contract (`IChatRouterService`) that transport adapters implement against. Transport adapters (REST today, Daemon CLI and WebSocket planned) are thin translation layers that convert protocol-specific requests into service method calls. The persistence layer (`ChatRouterStore`) is injected into the service, making it swappable.
+
+This pattern is sometimes described as a simplified Hexagonal Architecture: the service interface is the primary port, transport adapters are driving adapters, and the store is a driven adapter. Dependencies flow strictly downward -- the REST API depends on the service, the service depends on the store, and all layers depend on the shared type definitions. No layer reaches upward.
+
+## File Structure
+
+```
+chat-router/
+  package.json              -- Package manifest; defines dev, build, start, test scripts
+  src/
+    index.ts                -- Entry point; wires Store -> Service -> Server, calls listen(), handles shutdown
+    types.ts                -- All shared types and the IChatRouterService interface contract
+    service.ts              -- ChatRouterService class; all business logic (implements IChatRouterService)
+    db/
+      store.ts              -- ChatRouterStore class; JSON-file-backed persistence (or in-memory for tests)
+    api/
+      server.ts             -- createServer() factory; creates Express app, mounts JSON parser and API router
+      router.ts             -- createApiRouter() factory; maps HTTP endpoints to IChatRouterService methods
+    __tests__/
+      store.test.ts         -- 9 tests for the persistence layer
+      service.test.ts       -- 12 tests for the business logic layer
+      api.test.ts           -- 12 tests for the HTTP adapter layer
+```
+
+## Architectural Diagram
+
+```mermaid
+graph TD
+    Client["HTTP Client / Plugin"]
+
+    subgraph "chat-router process"
+        Entry["index.ts<br/><i>wiring + lifecycle</i>"]
+
+        subgraph "REST API Layer"
+            Server["api/server.ts<br/><i>Express app factory</i>"]
+            Router["api/router.ts<br/><i>route handlers</i>"]
+        end
+
+        subgraph "Service Layer"
+            Service["service.ts<br/><i>ChatRouterService</i><br/><i>validation, orchestration</i>"]
+        end
+
+        subgraph "Persistence Layer"
+            Store["db/store.ts<br/><i>ChatRouterStore</i><br/><i>JSON file or in-memory</i>"]
+        end
+
+        DataFile["data/chat-router.json"]
+    end
+
+    Types["types.ts<br/><i>shared by all layers</i>"]
+
+    Client -->|"HTTP request"| Server
+    Server --> Router
+    Entry -->|"wires"| Server
+    Entry -->|"wires"| Service
+    Entry -->|"wires"| Store
+    Router -->|"calls IChatRouterService methods"| Service
+    Service -->|"calls ChatRouterStore methods"| Store
+    Store -->|"fs read/write"| DataFile
+    Types -.->|"imported by"| Router
+    Types -.->|"imported by"| Service
+    Types -.->|"imported by"| Store
+```
+
 ## Layered Design
 
-The chat router is organized into four layers, each with a single responsibility:
+The four layers and their responsibilities:
 
-1. **Types** -- Defines all data structures and the service interface contract. Every other layer depends on types but types depend on nothing.
-2. **Store** -- Persistence layer that reads and writes timeline entries and conversations. Currently backed by a JSON file; designed to be swappable for SQLite without changing any other layer.
-3. **Service** -- All business logic. Validates inputs, orchestrates store operations, and provides the methods that transport adapters call. This is the source of truth for the system's behavior.
-4. **REST API** -- A thin Express-based HTTP adapter that translates HTTP requests into service method calls. Contains no business logic of its own. The `createServer()` factory returns an Express app without calling `.listen()`, keeping the server testable with supertest. The entry point in `index.ts` is responsible for calling `.listen()`.
+1. **Types** (`types.ts`) -- Defines all data structures (`InboundMessage`, `TimelineEntry`, `OutboundMessage`, `Conversation`) and the service interface contract (`IChatRouterService`). Every other layer imports from types, but types import nothing.
 
-Each layer only depends on the one below it. The REST API calls the service, the service calls the store, and the store manages its own internal state.
+2. **Persistence** (`db/store.ts`) -- Reads and writes timeline entries and conversations. The current implementation is backed by a JSON file; it is designed to be swappable for SQLite without changing any other layer. The store interface exposes the same method signatures regardless of backing storage. See [Implementation Details](implementation.md#store-internals) for internal mechanics.
 
-## The Service Layer Pattern
+3. **Service** (`service.ts`) -- All business logic. Validates inputs, transforms inbound messages into the internal data shape, orchestrates store operations, and provides the seven methods defined by `IChatRouterService`. This is the source of truth for the system's behavior.
 
-The core architectural principle is that all business logic lives in the service layer. The REST API (and future CLI and WebSocket adapters) are thin wrappers that:
-
-- Parse incoming requests into the shapes the service expects.
-- Call the appropriate service method.
-- Format the response for their transport protocol.
-
-This means adding a new transport adapter requires zero changes to the service or store. The adapter just maps its protocol to the same service interface.
-
-The service interface (IChatRouterService) defines seven methods: ingestMessage, recordResponse, getTimeline, getUnifiedTimeline, listConversations, getConversation, and healthCheck. All adapters call exactly these methods.
+4. **REST API** (`api/server.ts`, `api/router.ts`) -- A thin Express-based HTTP adapter that translates HTTP requests into service method calls. Contains no business logic. The `createServer()` factory returns an Express app without calling `.listen()`, keeping it testable with supertest. The entry point (`index.ts`) calls `.listen()` and handles graceful shutdown on SIGINT/SIGTERM.
 
 ## Data Flow
 
 When a message arrives via the REST API:
 
-1. The Express router receives the HTTP POST request and parses the JSON body.
-2. The router calls service.ingestMessage() with the parsed InboundMessage.
-3. The service validates all required fields (platform, message ID, chat ID, sender name, sender ID, timestamp). If any are missing, it throws an error which the router translates to HTTP 400.
-4. The service maps the inbound message to a TimelineEntry (adding direction "in", converting the platformMeta object to a JSON string via JSON.stringify, and assigning nullable fields).
-5. The service calls store.ingestTransaction(), which sequentially inserts the timeline entry and upserts the conversation record (creating it on first message, or incrementing messageCount, updating lastMessageAt, overwriting the label, and conditionally updating platformChatType on subsequent messages). Each step triggers a separate persist to disk.
-6. The store assigns an auto-increment ID and createdAt timestamp, then returns the completed TimelineEntry.
-7. The service returns the TimelineEntry to the router, which sends it as HTTP 201 JSON.
+1. The Express router receives the HTTP request and parses the JSON body.
+2. The router calls the corresponding service method (e.g., `ingestMessage`).
+3. The service validates the input and transforms it into the internal data shape.
+4. The service calls the store's `ingestTransaction`, which inserts a timeline entry and upserts the conversation record.
+5. The store assigns an auto-increment ID and persists to disk.
+6. The completed `TimelineEntry` is returned up through the layers to the HTTP response.
 
-Outbound responses follow a similar path through recordResponse, with direction set to "out" and a synthetic platform message ID generated by the service.
+Outbound responses follow the same path through `recordResponse`, with direction set to `"out"` and a synthetic platform message ID generated by the service.
 
-## The Normalized Message Model
+Query operations (timeline retrieval, conversation listing) follow the same layered path: the REST router parses query parameters, calls the appropriate service method, which delegates to the store, and the result is returned as JSON.
+
+## Normalized Message Model
 
 All messages are normalized to a common format regardless of which platform they came from.
 
-**InboundMessage** is what plugins send to the chat router. It contains the platform identifier, platform-specific message and chat IDs (as strings to accommodate different platforms), sender information, message text, a millisecond timestamp, and an optional platformMeta bag for preserving platform-specific data.
+**InboundMessage** is what plugins send to the chat router. It contains the platform identifier, platform-specific message and chat IDs (as strings to accommodate different platforms), sender information, optional message text, a millisecond Unix timestamp, and an optional `platformMeta` bag for preserving platform-specific data.
 
-**TimelineEntry** is the persisted form. It adds an auto-increment ID, a direction field ("in" or "out"), and a createdAt timestamp. The platformMeta is serialized to a JSON string. This is what all query methods return.
+**TimelineEntry** is the persisted form. It adds an auto-increment ID, a direction field (`"in"` or `"out"`), and an ISO 8601 `createdAt` timestamp. The `platformMeta` is serialized to a JSON string for storage. This is what all query methods return.
 
-**OutboundMessage** represents a response that should be delivered back to a platform. It contains the timeline entry ID, target platform and chat ID, response text, and an optional reference to the message being replied to.
+**OutboundMessage** represents a response that should be delivered back to a platform. It contains the timeline entry ID, target platform and chat ID, response text, and an optional `inReplyTo` reference to the timeline entry being replied to.
 
-**Conversation** tracks unique platform-plus-chat-ID pairs. It is created automatically when the first message from a new chat arrives. It stores a display label, a platformChatType (e.g., "private", "group"), first-seen and last-message timestamps, and a running message count. Conversations are never explicitly created or deleted by API callers.
+**Conversation** tracks unique `(platform, platformChatId)` pairs. It is created automatically when the first message from a new chat is ingested. It stores a display label, a `platformChatType` (e.g., `"private"`, `"group"`), first-seen and last-message timestamps, and a running message count. Conversations are never explicitly created or deleted by API callers.
 
 ## Platform Abstraction
 
-The system currently defines three platform types: telegram, discord, and web. All platform-specific data is carried in two places:
+The system defines three platform types: `"telegram"`, `"discord"`, and `"web"`. All platform-specific data is carried in two places:
 
-- The **platformChatType** field captures platform-specific chat classifications (e.g., Telegram's "private", "group", "supergroup").
-- The **platformMeta** field is a freeform JSON bag where plugins can stash any platform-specific data they want preserved (e.g., Telegram's full User object, Discord guild information).
+- **`platformChatType`** captures platform-specific chat classifications (e.g., Telegram's `"private"`, `"group"`, `"supergroup"`).
+- **`platformMeta`** is a freeform JSON bag where plugins can stash any platform-specific data they want preserved (e.g., Telegram's full User object, Discord guild information).
 
-The chat router never interprets platformMeta. It stores and returns it as-is. This means new platform-specific fields can be added without any changes to the chat router.
-
-## Persistence
-
-The current store is a JSON file that holds all timeline entries and conversations in memory, flushing to disk after each mutation. It supports an in-memory mode (used in tests) where no file I/O occurs.
-
-The store maintains its own auto-increment counters for timeline entry IDs and conversation IDs (both starting at 1). The ingest operation (insert timeline entry plus upsert conversation) is performed as two sequential steps, each persisting to disk separately. It is not truly atomic -- a crash between the two writes could leave state inconsistent.
-
-The store interface is designed so that a future SQLite implementation would expose the same methods with the same signatures. The service layer would require no changes for this swap.
-
-## Configuration
-
-The chat router is configured entirely through environment variables:
-
-- **CHAT_ROUTER_PORT** controls the HTTP port (default 3100).
-- **CHAT_ROUTER_DATA_DIR** controls where the persistence file is written (default ./data). The data file is named chat-router.json within this directory.
-
-The server performs graceful shutdown on SIGINT and SIGTERM, closing the HTTP server and flushing the store to disk.
+The chat router never interprets `platformMeta`. It stores and returns it as-is. This means new platform-specific fields can be added without any changes to the chat router code.
