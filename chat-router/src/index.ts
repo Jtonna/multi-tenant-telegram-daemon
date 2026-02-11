@@ -5,7 +5,7 @@ import { createServer } from "./api/server";
 const PORT = parseInt(process.env.CHAT_ROUTER_PORT || "3100", 10);
 const DATA_DIR = process.env.CHAT_ROUTER_DATA_DIR || "./data";
 
-const store = new ChatRouterStore(`${DATA_DIR}/chat-router.json`);
+const store = new ChatRouterStore(`${DATA_DIR}/chat-router.db`);
 store.init();
 const service = new ChatRouterService(store);
 const app = createServer(service);
