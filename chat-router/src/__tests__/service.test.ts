@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ChatRouterService } from "../service";
 import { ChatRouterStore } from "../db/store";
-import type { InboundMessage } from "../types";
+import type { InboundMessage, TimelineEntry } from "../types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -239,5 +239,59 @@ describe("ChatRouterService", () => {
     const meta = JSON.parse(retrieved.platformMeta!);
     expect(meta.botCommand).toBe("/start");
     expect(meta.entities).toEqual([1, 2]);
+  });
+
+  // ----- EventEmitter: ingestMessage emits message:new -----
+
+  it("ingestMessage emits a 'message:new' event with the TimelineEntry", () => {
+    const listener = vi.fn();
+    service.on("message:new", listener);
+
+    const entry = service.ingestMessage(makeInbound({ text: "event test" }));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const emitted: TimelineEntry = listener.mock.calls[0][0];
+    expect(emitted.id).toBe(entry.id);
+    expect(emitted.direction).toBe("in");
+    expect(emitted.text).toBe("event test");
+    expect(emitted.platform).toBe("telegram");
+  });
+
+  // ----- EventEmitter: recordResponse emits message:new -----
+
+  it("recordResponse emits a 'message:new' event with the TimelineEntry", () => {
+    // Ingest first so the conversation exists
+    service.ingestMessage(makeInbound());
+
+    const listener = vi.fn();
+    service.on("message:new", listener);
+
+    const entry = service.recordResponse({
+      platform: "telegram",
+      platformChatId: "chat-100",
+      text: "response event",
+      inReplyTo: 1,
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const emitted: TimelineEntry = listener.mock.calls[0][0];
+    expect(emitted.id).toBe(entry.id);
+    expect(emitted.direction).toBe("out");
+    expect(emitted.text).toBe("response event");
+    expect(emitted.senderName).toBe("System");
+  });
+
+  // ----- EventEmitter: multiple listeners receive events -----
+
+  it("multiple listeners all receive the message:new event", () => {
+    const listener1 = vi.fn();
+    const listener2 = vi.fn();
+    service.on("message:new", listener1);
+    service.on("message:new", listener2);
+
+    service.ingestMessage(makeInbound({ text: "multi-listener" }));
+
+    expect(listener1).toHaveBeenCalledTimes(1);
+    expect(listener2).toHaveBeenCalledTimes(1);
   });
 });
