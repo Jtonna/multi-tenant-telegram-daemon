@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { ChatRouterStore, TimelineEntryInput } from "../db/store";
 
 // ---------------------------------------------------------------------------
@@ -180,5 +183,126 @@ describe("ChatRouterStore", () => {
   it("returns null for unknown conversation", () => {
     const result = store.getConversation("telegram", "nonexistent");
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persistence across close/reopen
+// ---------------------------------------------------------------------------
+
+describe("ChatRouterStore — file persistence", () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chat-router-test-"));
+    dbPath = path.join(tmpDir, "test.sqlite");
+  });
+
+  afterEach(() => {
+    // Clean up temp directory
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it("persists data across close and reopen", () => {
+    // First session: create store, insert data, close
+    const store1 = new ChatRouterStore(dbPath);
+    store1.init();
+
+    store1.ingestTransaction(
+      {
+        direction: "in",
+        platform: "telegram",
+        platformMessageId: "persist-msg-1",
+        platformChatId: "persist-chat",
+        platformChatType: "private",
+        senderName: "Alice",
+        senderId: "user-1",
+        text: "Hello from session 1",
+        timestamp: Date.now(),
+        platformMeta: null,
+      },
+      "Alice",
+    );
+
+    const stats1 = store1.getStats();
+    expect(stats1.messageCount).toBe(1);
+    expect(stats1.conversationCount).toBe(1);
+
+    store1.close();
+
+    // Second session: reopen, verify data survived
+    const store2 = new ChatRouterStore(dbPath);
+    store2.init();
+
+    const stats2 = store2.getStats();
+    expect(stats2.messageCount).toBe(1);
+    expect(stats2.conversationCount).toBe(1);
+
+    const timeline = store2.getTimeline("telegram", "persist-chat");
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0].text).toBe("Hello from session 1");
+    expect(timeline[0].senderName).toBe("Alice");
+
+    const convo = store2.getConversation("telegram", "persist-chat");
+    expect(convo).not.toBeNull();
+    expect(convo!.label).toBe("Alice");
+    expect(convo!.messageCount).toBe(1);
+
+    store2.close();
+  });
+
+  it("accumulates data across multiple sessions", () => {
+    // Session 1
+    const store1 = new ChatRouterStore(dbPath);
+    store1.init();
+    store1.ingestTransaction(
+      {
+        direction: "in",
+        platform: "telegram",
+        platformMessageId: "msg-1",
+        platformChatId: "chat-1",
+        platformChatType: "private",
+        senderName: "Alice",
+        senderId: "user-1",
+        text: "First",
+        timestamp: Date.now(),
+        platformMeta: null,
+      },
+      "Alice",
+    );
+    store1.close();
+
+    // Session 2
+    const store2 = new ChatRouterStore(dbPath);
+    store2.init();
+    store2.ingestTransaction(
+      {
+        direction: "in",
+        platform: "telegram",
+        platformMessageId: "msg-2",
+        platformChatId: "chat-1",
+        platformChatType: "private",
+        senderName: "Alice",
+        senderId: "user-1",
+        text: "Second",
+        timestamp: Date.now(),
+        platformMeta: null,
+      },
+      "Alice",
+    );
+
+    const stats = store2.getStats();
+    expect(stats.messageCount).toBe(2);
+    expect(stats.conversationCount).toBe(1);
+
+    const convo = store2.getConversation("telegram", "chat-1");
+    expect(convo!.messageCount).toBe(2);
+
+    store2.close();
   });
 });

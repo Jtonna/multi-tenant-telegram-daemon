@@ -1,3 +1,4 @@
+import { EventEmitter } from "events";
 import type {
   Platform,
   InboundMessage,
@@ -12,11 +13,12 @@ import { ChatRouterStore } from "./db/store";
 // ChatRouterService — implements all business logic
 // ---------------------------------------------------------------------------
 
-export class ChatRouterService implements IChatRouterService {
+export class ChatRouterService extends EventEmitter implements IChatRouterService {
   private store: ChatRouterStore;
   private syntheticIdCounter = 0;
 
   constructor(store: ChatRouterStore) {
+    super();
     this.store = store;
   }
 
@@ -42,7 +44,9 @@ export class ChatRouterService implements IChatRouterService {
         : null,
     };
 
-    return this.store.ingestTransaction(entryData, msg.senderName);
+    const entry = this.store.ingestTransaction(entryData, msg.senderName);
+    this.emit("message:new", entry);
+    return entry;
   }
 
   recordResponse(params: {
@@ -79,7 +83,9 @@ export class ChatRouterService implements IChatRouterService {
         : null,
     };
 
-    return this.store.ingestTransaction(entryData, "System");
+    const entry = this.store.ingestTransaction(entryData, "System");
+    this.emit("message:new", entry);
+    return entry;
   }
 
   // -----------------------------------------------------------------------
