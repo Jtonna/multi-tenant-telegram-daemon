@@ -1,4 +1,5 @@
 import express, { Express, Request, Response, NextFunction } from "express";
+import cors from "cors";
 import type { IChatRouterService } from "../types";
 import { createApiRouter } from "./router";
 
@@ -8,6 +9,9 @@ import { createApiRouter } from "./router";
  */
 export function createServer(service: IChatRouterService): Express {
   const app = express();
+
+  // Allow cross-origin requests from any origin
+  app.use(cors());
 
   // Parse JSON request bodies
   app.use(express.json());

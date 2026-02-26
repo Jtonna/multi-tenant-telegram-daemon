@@ -68,13 +68,21 @@ export class ChatRouterClient {
     return res.json();
   }
 
-  async healthCheck(): Promise<{ ok: boolean }> {
+  async healthCheck(): Promise<{
+    ok: boolean;
+    messageCount: number;
+    conversationCount: number;
+  }> {
     const res = await fetch(`${this.baseUrl}/api/health`);
 
     if (!res.ok) {
       throw new Error(`Chat router health check failed: ${res.status}`);
     }
 
-    return res.json() as Promise<{ ok: boolean }>;
+    return res.json() as Promise<{
+      ok: boolean;
+      messageCount: number;
+      conversationCount: number;
+    }>;
   }
 }

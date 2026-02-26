@@ -101,11 +101,13 @@ export interface IChatRouterService {
   getTimeline(params: {
     platform: Platform;
     platformChatId: string;
+    after?: number;
     before?: number;
     limit?: number;
   }): TimelineEntry[];
 
   getUnifiedTimeline(params: {
+    after?: number;
     before?: number;
     limit?: number;
   }): TimelineEntry[];
