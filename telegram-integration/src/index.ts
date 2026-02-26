@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createBot } from "./bot";
 import { ChatRouterClient } from "./chatRouterClient";
+import { ChatRouterWsClient } from "./wsClient";
 
 async function main() {
   const token = process.env.BOT_TOKEN;
@@ -41,9 +42,18 @@ async function main() {
 
   const bot = createBot(token, chatRouter);
 
+  // WebSocket client for outbound messages (if chat router is configured)
+  let wsClient: ChatRouterWsClient | undefined;
+  if (chatRouterUrl) {
+    wsClient = new ChatRouterWsClient(chatRouterUrl, bot);
+    wsClient.connect();
+    console.log("WebSocket return leg enabled — listening for outbound messages\n");
+  }
+
   // Graceful shutdown
   function shutdown(signal: string) {
     console.log(`\nReceived ${signal}. Stopping bot...`);
+    wsClient?.disconnect();
     bot.stop();
   }
 
