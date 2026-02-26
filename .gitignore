@@ -18,3 +18,15 @@ data/
 # OS files
 .DS_Store
 Thumbs.db
+
+# starterpack — these paths must be tracked by git
+!.beads/
+!.beads/**
+!.starterpack/
+!.starterpack/**
+!.claude/
+!.claude/**
+!.github/
+!.github/**
+!CLAUDE.md
+!.gitattributes
