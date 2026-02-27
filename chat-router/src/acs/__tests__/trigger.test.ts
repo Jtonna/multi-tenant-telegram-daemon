@@ -237,6 +237,8 @@ describe("triggerAcsJob", () => {
     expect(parsedBody.args).toContain("First line");
     expect(parsedBody.args).toContain("Second line");
     expect(parsedBody.args).toContain("Third line");
-    expect(parsedBody.args).toMatch(/First line\nSecond line\nThird line/);
+    // Newlines should be replaced with spaces in the body sent to ACS
+    expect(parsedBody.args).toMatch(/First line Second line Third line/);
+    expect(parsedBody.args).not.toMatch(/First line\nSecond line\nThird line/);
   });
 });
