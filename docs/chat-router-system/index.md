@@ -26,6 +26,7 @@ chat-router/src/
   api/              Express HTTP routes
   cli/              CLI adapter and HTTP client
   ws/               WebSocket adapter and protocol types
+  acs/              ACS job trigger module
   db/               SQLite store
   scripts/          seed and query helper scripts
   __tests__/        Vitest test suite
@@ -43,7 +44,10 @@ The server listens on port 3100 by default. Configuration is controlled entirely
 |---|---|---|
 | `CHAT_ROUTER_PORT` | `3100` | HTTP port the server binds to |
 | `CHAT_ROUTER_DATA_DIR` | `./data` | Directory where the SQLite database file is written (`chat-router.db`) |
-| `CHAT_ROUTER_URL` | `http://localhost:3100` | Base URL used by the CLI adapter (and the Telegram plugin) to reach the daemon. In the Telegram plugin, leaving this unset causes the bot to run in standalone mode (echo only). |
+| `CHAT_ROUTER_URL` | `http://localhost:3100` | Base URL used by the CLI adapter (and the Telegram plugin) to reach the daemon |
+| `ACS_JOB_NAME` | *(none)* | ACS job name to trigger on inbound messages. Omit to disable auto-triggering |
+| `ACS_URL` | `http://127.0.0.1:8377` | Base URL of the ACS service |
+| `ROUTER_SELF_URL` | `http://localhost:{PORT}` | Router URL passed to the agent so it can curl responses back |
 
 Build and run the compiled version:
 
@@ -103,7 +107,10 @@ Query the running chat router to inspect conversations and timelines:
 | `better-sqlite3` | SQLite persistence |
 | `ws` | WebSocket server |
 | `cors` | Cross-origin request support |
+| `dotenv` | Environment variable loading from `.env` files |
 
 ## Cross-Service Interaction
 
-The Telegram plugin (`telegram-integration`) uses `CHAT_ROUTER_URL` to locate the chat router. On startup it performs a health check; if the router is unreachable it logs a warning but continues starting. When `CHAT_ROUTER_URL` is not set, the Telegram bot runs in standalone mode (echo only) without forwarding messages to the router.
+The Telegram plugin (`telegram-integration`) uses `CHAT_ROUTER_URL` to locate the chat router. On startup it performs a health check; if the router is unreachable it logs a warning but continues starting. When `CHAT_ROUTER_URL` is not set, the Telegram bot runs in standalone mode without forwarding messages to the router.
+
+The router can optionally trigger ACS jobs on inbound messages. When `ACS_JOB_NAME` is set, each inbound message triggers the named ACS job with a prompt containing the router URL, platform, chat ID, and message text. The 201 response is held until the trigger completes, so the Telegram plugin's thumbs-up reaction confirms the agent job was kicked off.

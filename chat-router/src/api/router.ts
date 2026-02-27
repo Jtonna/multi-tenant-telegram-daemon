@@ -1,17 +1,27 @@
 import { Router, Request, Response } from "express";
 import type { IChatRouterService, Platform } from "../types";
+import { triggerAcsJob, AcsTriggerConfig } from "../acs/trigger";
 
 /**
  * Creates an Express Router that maps HTTP endpoints to IChatRouterService
  * methods. The service is injected as a parameter.
  */
-export function createApiRouter(service: IChatRouterService): Router {
+export function createApiRouter(
+  service: IChatRouterService,
+  acsConfig?: AcsTriggerConfig,
+): Router {
   const router = Router();
 
-  // POST /messages — ingest an inbound message
-  router.post("/messages", (req: Request, res: Response) => {
+  // POST /messages — ingest an inbound message, then trigger ACS
+  router.post("/messages", async (req: Request, res: Response) => {
     try {
       const entry = service.ingestMessage(req.body);
+
+      // Trigger ACS job before returning — plugin thumbs-up gates on this
+      if (acsConfig) {
+        await triggerAcsJob(acsConfig, entry);
+      }
+
       res.status(201).json(entry);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
