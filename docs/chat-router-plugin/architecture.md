@@ -125,7 +125,7 @@ The mapper handles four categories of transformation: ID normalization (numeric 
 
 The plugin uses grammY, a Telegram Bot API framework for Node.js. It connects to Telegram using long polling, meaning the bot continuously asks Telegram's servers for new messages. This approach requires no inbound network configuration -- no webhook URL, no SSL certificate, no public-facing server.
 
-The bot registers two handlers: a `/start` command handler and a general message handler. See [Command Handlers](implementation.md#command-handlers) and [Message Handler](implementation.md#message-handler) for details on what each handler does.
+The bot registers two command handlers (`/start` and `/config`) and a general message handler. See [Command Handlers](implementation.md#command-handlers) and [Message Handler](implementation.md#message-handler) for details on what each handler does.
 
 ## Resilient Forwarding
 
@@ -137,15 +137,29 @@ Telegram imposes a 4096-character limit on message text. The `splitMessage` util
 
 ## Configuration and Modes
 
-The plugin's behavior is controlled by two environment variables:
+The plugin's behavior is controlled by four environment variables:
 
 | Environment Variable | Required | Description |
 |---|---|---|
 | BOT_TOKEN | Yes | Telegram bot token from BotFather. Without it, the process exits immediately with an error message. |
 | CHAT_ROUTER_URL | No | Base URL of the chat router REST API (e.g., `http://localhost:3100`). Its presence or absence determines the operating mode. |
+| TELEGRAM_ALLOWED_USER_IDS | No | Comma-separated Telegram user IDs allowed to send DMs to the bot. Empty = deny all. |
+| TELEGRAM_ALLOWED_GROUP_IDS | No | Comma-separated Telegram group chat IDs where the bot will respond. Empty = deny all. |
 
 **Connected mode**: When `CHAT_ROUTER_URL` is set, the plugin creates an HTTP client, forwards all messages to the chat router, and reacts with a thumbs-up emoji (👍) upon successful ingestion.
 
 **Standalone mode**: When `CHAT_ROUTER_URL` is absent, the plugin receives messages but does not forward or react. No chat router interaction.
 
 The mode is determined at startup and logged to the console. There is no runtime switching between modes.
+
+## Access Control / Security
+
+The plugin implements a **default-deny allowlist** model for access control. When `TELEGRAM_ALLOWED_USER_IDS` or `TELEGRAM_ALLOWED_GROUP_IDS` environment variables are set (even to an empty string), the bot operates in lockdown mode -- only messages from explicitly listed users or groups are processed. Messages from unlisted sources are silently dropped, with a denial logged to the console.
+
+**Private chats (DMs)**: The bot checks the sender's user ID against the `TELEGRAM_ALLOWED_USER_IDS` list. If the user is not in the list, the message is dropped.
+
+**Group chats**: The bot checks the group's chat ID against the `TELEGRAM_ALLOWED_GROUP_IDS` list. If the group is not in the list, the message is dropped.
+
+**Channels**: All channel messages are denied by default. Channels are not supported.
+
+If neither access control environment variable is set, the bot allows all messages (backwards compatible with Phase 1 behavior). Users can discover their user ID and group chat ID by running the `/config` command in Telegram. See [Access Control Implementation](implementation.md#access-control) for implementation details.

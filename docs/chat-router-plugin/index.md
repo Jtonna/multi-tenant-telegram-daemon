@@ -4,7 +4,7 @@
 
 The Telegram integration is a platform-specific plugin for the MTTD (Multi-Tenant Telegram Daemon) system. It serves as the bridge between Telegram and the chat router -- connecting to the Telegram Bot API on one side and the chat router's REST API and WebSocket endpoint on the other. Each plugin runs as its own process and communicates with the chat router via HTTP (for inbound messages) and WebSocket (for outbound messages).
 
-The plugin supports bidirectional communication: inbound messages from Telegram are forwarded to the chat router via REST POST, and outbound messages from the chat router are received via WebSocket push events and delivered to Telegram. It is the first of potentially many platform plugins (Discord, Slack, web, etc.). See [Architecture](architecture.md) for details on how the pieces fit together.
+The plugin supports bidirectional communication: inbound messages from Telegram are forwarded to the chat router via REST POST, and outbound messages from the chat router are received via WebSocket push events and delivered to Telegram. It implements a **default-deny allowlist** model for access control, ensuring only explicitly authorized users and groups can interact with the bot. It is the first of potentially many platform plugins (Discord, Slack, web, etc.). See [Architecture](architecture.md) for details on how the pieces fit together.
 
 ## Documentation
 
@@ -15,8 +15,12 @@ The plugin supports bidirectional communication: inbound messages from Telegram 
 
 From the `telegram-integration/` directory:
 
-1. Copy `.env.example` to `.env` and fill in the values.
+1. Copy `.env.example` to `.env` and fill in the required values:
+   - `BOT_TOKEN` (required) -- Your Telegram bot token from @BotFather
+   - `CHAT_ROUTER_URL` (optional) -- Chat router URL for connected mode (e.g., `http://localhost:3100`)
+   - `TELEGRAM_ALLOWED_USER_IDS` (optional) -- Comma-separated user IDs for the allowlist. Use the `/config` command in Telegram to discover user IDs. Empty = deny all (default-deny).
+   - `TELEGRAM_ALLOWED_GROUP_IDS` (optional) -- Comma-separated group chat IDs for the allowlist. Use the `/config` command in a group to discover the group ID. Empty = deny all (default-deny).
 2. Run with `npm run dev` for development or `npm run build && npm start` for production.
 3. Run the test suite with `npm test`.
 
-See [Configuration and Modes](architecture.md#configuration-and-modes) for environment variable details.
+See [Configuration and Modes](architecture.md#configuration-and-modes) for environment variable details and [Access Control / Security](architecture.md#access-control--security) for the allowlist model.

@@ -4,22 +4,81 @@ For the architectural context behind these implementation details -- design patt
 
 ## Bot Creation
 
-The bot is created by a factory function `createBot(token: string, chatRouter?: ChatRouterClient): Bot` in `bot.ts`. The function creates a grammY `Bot` instance, registers the `/start` command handler and the main message handler, and returns the configured bot without starting it.
+The bot is created by a factory function `createBot(token: string, chatRouter?: ChatRouterClient, accessConfig?: BotAccessConfig): Bot` in `bot.ts`. The function creates a grammY `Bot` instance, registers the `/start` and `/config` command handlers, installs the access control guard middleware, registers the main message handler, and returns the configured bot without starting it.
 
 The optional `ChatRouterClient` parameter implements the Optional Dependency Injection pattern described in [Architecture](architecture.md#design-patterns). When present, the message handler forwards messages; when absent, it skips forwarding entirely. The bot creation and handler logic are identical in both modes -- the only difference is whether the `chatRouter` variable is defined.
+
+The optional `accessConfig` parameter enables access control enforcement. When undefined, the bot allows all messages (backwards compatible). When provided, the guard middleware uses it to enforce the allowlist. See [Access Control](#access-control) for details.
 
 The caller (`index.ts`) is responsible for calling `bot.start()` separately, keeping the factory function free of lifecycle concerns.
 
 ## Command Handlers
 
-The only command handler is `/start`, which sends a static welcome message:
+The bot registers two command handlers:
+
+**`/start` command**: Sends a static welcome message:
 
 > Hello! I'm the multi-tenant Telegram daemon bot.
 > Send me any message and it will be forwarded to the chat router.
 >
 > This is a Phase 1 test bot for exploring the Telegram API.
 
-No other commands are registered.
+**`/config` command**: Returns the user's Telegram user ID and (if applicable) the group chat ID. This command helps users discover the IDs needed for the access control allowlists. Example output:
+
+> Your Telegram user ID: 123456789
+> Group chat ID: -1001234567890
+> Chat type: supergroup
+>
+> Give these IDs to the bot admin to get allowlisted.
+
+The `/config` command always responds, even if the user is not in the allowlist. This is intentional -- it allows new users to discover their ID before requesting access. The access control guard runs after command handlers, so commands bypass the allowlist check.
+
+## Access Control
+
+The bot implements access control through three components: the `BotAccessConfig` interface, the `checkAccess()` pure function, and a guard middleware. All three are defined in `bot.ts`.
+
+### BotAccessConfig Interface
+
+```typescript
+export interface BotAccessConfig {
+  allowedUserIds: Set<number>;
+  allowedGroupIds: Set<number>;
+}
+```
+
+This configuration is constructed in `index.ts` by parsing the `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_ALLOWED_GROUP_IDS` environment variables. The parsing logic splits on commas, trims whitespace, filters empty strings, converts to numbers, and filters out NaN values. The resulting sets are passed to `createBot()` as the optional third parameter.
+
+### checkAccess() Function
+
+```typescript
+export function checkAccess(
+  chatType: string,
+  userId: number,
+  chatId: number,
+  config?: BotAccessConfig
+): boolean
+```
+
+This is a pure function with no side effects. It returns `true` if access is allowed, `false` otherwise. The logic:
+
+- If `config` is undefined, return `true` (allow all -- backwards compatible).
+- If `chatType` is `"private"`, check if `userId` is in `config.allowedUserIds`.
+- If `chatType` is `"group"` or `"supergroup"`, check if `chatId` is in `config.allowedGroupIds`.
+- For all other chat types (channels, unknown), return `false`.
+
+### Guard Middleware
+
+The guard middleware is registered via `bot.use()` before the message handler. It extracts `chatType`, `userId`, and `chatId` from the incoming context, calls `checkAccess()`, and either continues to the next handler (`next()`) or silently drops the message (returns without calling `next()`).
+
+When a message is dropped, the middleware logs:
+
+```
+[ACCESS DENIED] chatType=<type> userId=<id> chatId=<id>
+```
+
+The middleware skips access checks for non-message updates (e.g., callback queries, inline queries) by returning early if `chatType`, `userId`, or `chatId` are undefined.
+
+**Important**: Command handlers run before the guard middleware, so `/start` and `/config` commands are always processed, even from unlisted users. This allows new users to discover their IDs via `/config` before requesting access.
 
 ## Message Handler
 
@@ -130,8 +189,8 @@ The plugin is designed for graceful degradation at every level:
 
 All tests use vitest. No tests require a running Telegram bot, chat router, or network access.
 
-- **Bot tests** (`bot.test.ts`, 3 tests) -- Verify that `createBot` returns a valid `Bot` instance with expected methods (`on`, `start`, `stop`), that handlers are registered (the bot is defined after creation), and that an empty string token throws an error.
+- **Bot tests** (`bot.test.ts`, 7 tests) -- Verify that `createBot` returns a valid `Bot` instance with expected methods (`on`, `start`, `stop`), that handlers are registered (the bot is defined after creation), and that an empty string token throws an error. Also test the `checkAccess()` function: allow-all when config is undefined, allow DM when user is in allowlist, deny DM when user is not in allowlist, allow group when group is in allowlist, deny group when group is not in allowlist, deny channels always, deny unknown chat types.
 - **Mapper tests** (`chatRouterClient.test.ts`, 10 tests) -- Test `mapTelegramToInbound` with mocked grammY Context objects. Verify: platform is `"telegram"`, `platformMessageId` is a string, `platformChatId` is a string (including negative IDs), timestamp is converted to milliseconds, `senderName` concatenates first and last name, missing `last_name` is handled gracefully, `platformChatType` passes through from `chat.type`, `platformMeta` contains `chatTitle`/`fromUsername`/`fromIsBot`, `senderId` is a string, and `text` is preserved. Note: the `ChatRouterClient` HTTP class itself is not currently tested; only the mapper function has coverage.
 - **splitMessage tests** (`splitMessage.test.ts`, 9 tests) -- Cover: short messages (single-element return), messages exactly at the 4096 limit, empty strings, splitting at newline boundaries (with small `maxLength`), hard splitting with no newlines, preferring newline over hard split, messages just over the limit, multiple newlines, and the default 4096 limit.
 
-Total: 22 tests across 3 test files.
+Total: 26 tests across 3 test files.
