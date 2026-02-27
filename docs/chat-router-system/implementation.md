@@ -4,7 +4,7 @@ For the layered design, data model definitions, and architectural overview, see 
 
 ## REST API Endpoints
 
-The Express server applies CORS middleware (via the `cors` package) permitting requests from any origin. Middleware order: `cors()`, then `express.json()`, then route mounting at the `/api` prefix. All request and response bodies are JSON.
+The Express server applies CORS middleware (via the `cors` package) permitting requests from any origin. Middleware order: `cors()`, then `express.json()`, then request logging middleware (logs method, URL, body summary, and response status with timing), then route mounting at the `/api` prefix. All request and response bodies are JSON.
 
 ### POST /api/messages
 
@@ -14,7 +14,7 @@ Ingests an inbound message from a platform plugin.
 
 **Optional body fields:** `platformChatType`, `text`, `platformMeta` (object).
 
-**Success:** Returns `201` with the created `TimelineEntry` including its assigned `id`, `direction` set to `"in"`, and `createdAt` timestamp.
+**Success:** Returns `201` with the created `TimelineEntry` including its assigned `id`, `direction` set to `"in"`, and `createdAt` timestamp. If ACS auto-trigger is enabled (via `AcsTriggerConfig`), the ACS job is triggered before this response is sent — the 201 confirms both ingestion and trigger. ACS trigger failures are logged but do not affect the response status.
 
 **Error:** Returns `400` with `{ "error": "<message>" }` if any required field is missing.
 
@@ -149,6 +149,20 @@ The protocol types are defined in `ws/protocol.ts`:
 
 The adapter listens on `service.on("message:new")` and broadcasts a `WsPush` message to all connected clients whose `readyState` is `OPEN`. This is how `ingestMessage` and `recordResponse` events reach WebSocket clients without polling.
 
+## ACS Auto-Trigger
+
+When `AcsTriggerConfig` is provided to `createServer()`, the `POST /api/messages` endpoint automatically triggers an ACS job for each inbound message. The trigger module (`acs/trigger.ts`) exports three functions:
+
+**`buildPrompt(entry, routerUrl)`** -- Constructs a single-line prompt: `[ROUTER=<routerUrl>] [PLATFORM=<platform>] [CHAT_ID=<platformChatId>] [IN_REPLY_TO=<entryId>] User message: <text>`. This format allows the headless agent to parse routing context and user input from one line.
+
+**`triggerAcsJob(config, entry)`** -- Checks that the entry has `direction === "in"` and non-empty `text`. Builds the prompt, escapes double quotes, and POSTs to `{acsBaseUrl}/api/jobs/{jobName}/trigger` with JSON body `{ args: "-p \"<prompt>\"" }`. Logs the `run_id` on success or the error on failure. Returns `true`/`false` — never throws.
+
+The trigger is awaited in the API route handler before returning 201. This means downstream clients (e.g., the Telegram plugin) can treat a successful response as confirmation that the agent was invoked.
+
+## File Logging
+
+The entry point configures tee-style logging at startup. Both `console.log` and `console.error` are overridden to write simultaneously to stdout and `logs/chat-router.log`. Each line is prefixed with an ISO 8601 timestamp and severity level (`[LOG]` or `[ERROR]`). The log directory is created if it does not exist.
+
 ## Store Internals
 
 ### State Shape
@@ -191,7 +205,7 @@ The entry point (`index.ts`) operates in one of two modes:
 
 1. **CLI mode** -- If `process.argv[2]` matches a known CLI command (via `isCliCommand()`), the process runs `runCli()` and exits when the command completes. No server is started.
 
-2. **Daemon mode** -- Otherwise, the entry point reads `CHAT_ROUTER_PORT` (default `3100`) and `CHAT_ROUTER_DATA_DIR` (default `./data`) from environment variables. The SQLite database file is `${DATA_DIR}/chat-router.db`. After the Express app starts listening, `attachWebSocket(server, service)` is called to attach the WebSocket server. On `SIGINT` or `SIGTERM` the HTTP server is closed first (which also tears down the WebSocket server), then the store connection.
+2. **Daemon mode** -- Otherwise, the entry point loads `.env` via `dotenv/config`, then reads `CHAT_ROUTER_PORT` (default `3100`), `CHAT_ROUTER_DATA_DIR` (default `./data`), and optional ACS configuration (`ACS_JOB_NAME`, `ACS_URL`, `ROUTER_SELF_URL`) from environment variables. If `ACS_JOB_NAME` is set, an `AcsTriggerConfig` is constructed and passed to `createServer()`. The SQLite database file is `${DATA_DIR}/chat-router.db`. After the Express app starts listening, `attachWebSocket(server, service)` is called to attach the WebSocket server. On `SIGINT` or `SIGTERM` the HTTP server is closed first (which also tears down the WebSocket server), then the store connection.
 
 ## Telegram Plugin Health Check
 
