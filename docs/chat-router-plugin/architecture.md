@@ -99,9 +99,9 @@ When a user sends a message to the Telegram bot:
 1. grammY receives the message via long polling and invokes the message handler with a Context object.
 2. The handler logs message details to the console (wall-clock timestamp, message ID, chat ID, chat type, sender info, message timestamp, text), plus the full raw message object as JSON.
 3. If a ChatRouterClient is configured, the handler maps the grammY Context into the chat router's normalized InboundMessage format and sends it via HTTP POST. This runs for all message types, regardless of whether text is present.
-4. If the message contains text, the handler splits it if necessary and echoes each chunk back as a Telegram reply.
+4. If forwarding succeeds, the handler reacts to the message with a thumbs-up emoji (👍) to confirm the message was ingested and the agent job was triggered.
 
-Steps 3 and 4 are failure-independent: if forwarding fails, the echo still happens. However, they execute sequentially -- the echo does not begin until forwarding either completes or fails. See [Message Handler](implementation.md#message-handler) for the full step-by-step behavior.
+Steps 3 and 4 are sequential: the reaction only fires after successful forwarding. If forwarding fails, no reaction is sent. See [Message Handler](implementation.md#message-handler) for the full step-by-step behavior.
 
 **Outbound (Chat Router → Telegram):**
 
@@ -129,11 +129,11 @@ The bot registers two handlers: a `/start` command handler and a general message
 
 ## Resilient Forwarding
 
-The plugin has no startup dependency on the chat router. It can start before the chat router is running and will function normally in standalone echo mode until the chat router becomes available. Forwarding failures are isolated: if the HTTP request to the chat router fails for any reason, the error is logged and the bot continues processing. The two processes are failure-independent by design. See [Error Handling](implementation.md#error-handling) for the implementation mechanism.
+The plugin has no startup dependency on the chat router. It can start before the chat router is running and will function normally in standalone mode until the chat router becomes available. Forwarding failures are isolated: if the HTTP request to the chat router fails for any reason, the error is logged and the bot continues processing. The two processes are failure-independent by design. See [Error Handling](implementation.md#error-handling) for the implementation mechanism.
 
 ## Message Splitting
 
-Telegram imposes a 4096-character limit on message text. The `splitMessage` utility handles this by breaking long messages into chunks, preferring newline boundaries for readability. This utility is used when echoing messages back; it is not needed for forwarding to the chat router, which has no message length limit. See [The splitMessage Utility](implementation.md#the-splitmessage-utility) for the algorithm steps.
+Telegram imposes a 4096-character limit on message text. The `splitMessage` utility handles this by breaking long messages into chunks, preferring newline boundaries for readability. This utility is used by the WebSocket client when delivering outbound messages to Telegram; it is not needed for forwarding to the chat router, which has no message length limit. See [The splitMessage Utility](implementation.md#the-splitmessage-utility) for the algorithm steps.
 
 ## Configuration and Modes
 
@@ -144,8 +144,8 @@ The plugin's behavior is controlled by two environment variables:
 | BOT_TOKEN | Yes | Telegram bot token from BotFather. Without it, the process exits immediately with an error message. |
 | CHAT_ROUTER_URL | No | Base URL of the chat router REST API (e.g., `http://localhost:3100`). Its presence or absence determines the operating mode. |
 
-**Connected mode**: When `CHAT_ROUTER_URL` is set, the plugin creates an HTTP client and forwards all messages to the chat router.
+**Connected mode**: When `CHAT_ROUTER_URL` is set, the plugin creates an HTTP client, forwards all messages to the chat router, and reacts with a thumbs-up emoji (👍) upon successful ingestion.
 
-**Standalone mode**: When `CHAT_ROUTER_URL` is absent, the plugin operates as a simple echo bot with no chat router interaction.
+**Standalone mode**: When `CHAT_ROUTER_URL` is absent, the plugin receives messages but does not forward or react. No chat router interaction.
 
 The mode is determined at startup and logged to the console. There is no runtime switching between modes.

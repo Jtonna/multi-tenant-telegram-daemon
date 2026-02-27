@@ -26,6 +26,8 @@ chat-router/
     ws/
       adapter.ts            -- WebSocket server adapter; attaches to HTTP server at /ws via the ws library
       protocol.ts           -- TypeScript types for the WebSocket JSON protocol (WsRequest, WsResponse, WsPush, WsError)
+    acs/
+      trigger.ts            -- ACS job trigger module; builds prompt and POSTs to ACS on inbound messages
     scripts/
       seed.ts               -- Inserts fake Telegram messages via the service layer (npm run seed)
       query.ts              -- Queries the running chat router via HTTP REST API (npm run query)
@@ -39,10 +41,13 @@ chat-router/
 
 ## Configuration
 
-The entry point reads two environment variables in daemon mode:
+The entry point reads environment variables via `dotenv` (from `.env` file) in daemon mode:
 
 - **`CHAT_ROUTER_PORT`** -- TCP port for the HTTP server (default: `3100`).
 - **`CHAT_ROUTER_DATA_DIR`** -- Directory for the SQLite database file (default: `./data`).
+- **`ACS_JOB_NAME`** -- ACS job to trigger on inbound messages (optional; omit to disable auto-triggering).
+- **`ACS_URL`** -- Base URL of the ACS service (default: `http://127.0.0.1:8377`).
+- **`ROUTER_SELF_URL`** -- Public URL of the router, passed to the agent so it can curl responses back (default: `http://localhost:{PORT}`).
 
 The CLI adapter and the Telegram integration both read:
 
@@ -114,11 +119,12 @@ The layers and their responsibilities:
 3. **Service** (`service.ts`) -- All business logic. Validates inputs, transforms inbound messages into the internal data shape, orchestrates store operations, and provides the seven methods defined by `IChatRouterService`. The service extends `EventEmitter` and emits `"message:new"` after both `ingestMessage` and `recordResponse`, providing the observable event stream that powers WebSocket real-time push.
 
 4. **Transport Adapters** -- Three thin adapters translate protocol-specific requests into `IChatRouterService` method calls. None contain business logic.
-   - **REST API** (`api/server.ts`, `api/router.ts`) -- Express-based HTTP adapter. `createServer()` configures CORS, JSON parsing, the API router, and a global error handler, then returns the Express app without calling `.listen()`, keeping it testable with supertest.
+   - **REST API** (`api/server.ts`, `api/router.ts`) -- Express-based HTTP adapter. `createServer()` configures CORS, JSON parsing, request logging middleware, the API router, and a global error handler, then returns the Express app without calling `.listen()`, keeping it testable with supertest. When `AcsTriggerConfig` is provided, the `POST /api/messages` endpoint triggers an ACS job after ingesting each inbound message.
+   - **ACS Integration** (`acs/trigger.ts`) -- Optional auto-trigger module. When enabled via `ACS_JOB_NAME`, the REST API calls `triggerAcsJob()` after ingesting each inbound message (before returning 201). The module builds a single-line prompt containing router URL, platform, chat ID, and message text, then POSTs to the ACS trigger endpoint. Trigger failures are logged but do not block the ingest response.
    - **CLI** (`cli/adapter.ts`, `cli/client.ts`) -- Detects CLI mode via `isCliCommand(process.argv[2])`. Dispatches to a `ChatRouterClient` that calls the running daemon's REST API using native `fetch` (no external HTTP library). Supports commands: `health`, `conversations`, `timeline`, `ingest`, `respond`. Invoked via `npm run cli -- <command> [args]`.
    - **WebSocket** (`ws/adapter.ts`, `ws/protocol.ts`) -- Attaches a `WebSocketServer` (from the `ws` library) to the HTTP server at path `/ws` after `app.listen()`. Supports four read-only request types (`health`, `conversations`, `timeline`, `unified_timeline`). Broadcasts `new_message` push events to all connected clients when the service emits `"message:new"`.
 
-The entry point (`index.ts`) handles mode detection and lifecycle: in CLI mode it runs the command and exits; in daemon mode it wires Store, Service, and Server, calls `.listen()`, attaches the WebSocket adapter, and handles graceful shutdown on SIGINT/SIGTERM (closing the HTTP server and database connection).
+The entry point (`index.ts`) handles mode detection and lifecycle: in CLI mode it runs the command and exits; in daemon mode it wires Store, Service, and Server, builds the optional `AcsTriggerConfig` from environment variables, calls `.listen()`, attaches the WebSocket adapter, and handles graceful shutdown on SIGINT/SIGTERM (closing the HTTP server and database connection). File logging is configured at startup, tee-ing all `console.log` and `console.error` output to both stdout and `logs/chat-router.log` with ISO 8601 timestamps.
 
 ## Data Flow
 
@@ -129,7 +135,8 @@ The entry point (`index.ts`) handles mode detection and lifecycle: in CLI mode i
 3. The service validates the input and transforms it into the internal data shape.
 4. The service calls the store's `ingestTransaction`, which wraps a timeline entry insert and conversation upsert in a SQLite transaction (atomic). SQLite assigns an auto-increment ID during the insert.
 5. The service emits `"message:new"` with the completed entry (triggering WebSocket broadcast).
-6. The completed `TimelineEntry` is returned up through the layers to the HTTP response.
+6. If `AcsTriggerConfig` is provided, the ACS module builds a prompt and POSTs to the ACS job trigger endpoint. The trigger is awaited but failures are logged, not fatal.
+7. The completed `TimelineEntry` is returned up through the layers to the HTTP response.
 
 Outbound responses follow the same path through `recordResponse`, with direction set to `"out"`. The service sets senderName to `"System"`, senderId to `"system"`, and generates a synthetic platform message ID in the format `router-N` using an in-memory counter.
 
@@ -144,6 +151,8 @@ Query operations (timeline retrieval, conversation listing) follow the same laye
 ## Cross-System Integration
 
 The Telegram integration plugin (`telegram-integration`) performs an async health check against the chat router at startup. If the health check fails, it logs a warning but does not block bot startup ("warn but don't block" pattern). This means the bot remains functional even when the chat router is temporarily unavailable.
+
+The chat router can optionally trigger ACS jobs on inbound messages. When `ACS_JOB_NAME` is set, the router constructs an `AcsTriggerConfig` at startup and passes it to the API router. After each inbound message is persisted, the router builds a single-line prompt and POSTs to the ACS trigger endpoint. The 201 response is held until the trigger completes, so downstream clients (e.g., the Telegram plugin's thumbs-up reaction) confirm that the agent job was kicked off, not just that the message was stored.
 
 ## Normalized Message Model
 
@@ -168,4 +177,4 @@ The chat router never interprets `platformMeta`. It stores and returns it as-is.
 
 ## Dependencies
 
-Runtime: `express`, `better-sqlite3`, `cors`, `ws` (^8.19.0). Dev: `vitest`, `supertest`, `tsx`, `typescript`, and associated `@types/*` packages.
+Runtime: `express`, `better-sqlite3`, `cors`, `ws` (^8.19.0), `dotenv`. Dev: `vitest`, `supertest`, `tsx`, `typescript`, and associated `@types/*` packages.

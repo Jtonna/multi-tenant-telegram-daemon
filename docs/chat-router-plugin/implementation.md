@@ -15,7 +15,7 @@ The caller (`index.ts`) is responsible for calling `bot.start()` separately, kee
 The only command handler is `/start`, which sends a static welcome message:
 
 > Hello! I'm the multi-tenant Telegram daemon bot.
-> Send me any message and I'll echo it back.
+> Send me any message and it will be forwarded to the chat router.
 >
 > This is a Phase 1 test bot for exploring the Telegram API.
 
@@ -23,7 +23,7 @@ No other commands are registered.
 
 ## Message Handler
 
-When a message arrives, the handler (registered via `bot.on("message", ...)`) executes three steps in order:
+When a message arrives, the handler (registered via `bot.on("message", ...)`) executes two steps in order:
 
 **Step 1 -- Logging**: The handler extracts key fields from the message and logs them to the console in a human-readable aligned format:
 
@@ -37,11 +37,7 @@ When a message arrives, the handler (registered via `bot.on("message", ...)`) ex
 
 The full raw message object is also logged as formatted JSON for exploration purposes. This logging is always active regardless of operating mode.
 
-**Step 2 -- Forwarding**: If a `ChatRouterClient` was provided to the factory function, the handler calls `mapTelegramToInbound(ctx)` to convert the grammY Context into an `InboundMessage`, then calls `chatRouter.ingestMessage(inbound)` to send it to the chat router's REST API. This entire operation is wrapped in a try-catch: if the fetch or the mapper throws, the error is logged to `console.error` and processing continues to step 3. The handler does not inspect the response from the chat router; it only checks that the request succeeded. Forwarding runs for all message types regardless of whether text is present.
-
-**Step 3 -- Echo**: If `msg.text` exists, the handler calls `splitMessage(msg.text)` to break the text into chunks (if necessary), then sends each chunk back via `ctx.reply(chunk)` in a sequential loop. Non-text messages (photos, stickers, etc.) receive no echo reply.
-
-Steps 2 and 3 are sequential (`await` on the forwarding before the echo), but failure-independent: a forwarding failure does not prevent the echo.
+**Step 2 -- Forwarding and Reaction**: If a `ChatRouterClient` was provided to the factory function, the handler calls `mapTelegramToInbound(ctx)` to convert the grammY Context into an `InboundMessage`, then calls `chatRouter.ingestMessage(inbound)` to send it to the chat router's REST API. If ingestion succeeds, the handler reacts to the original message with a thumbs-up emoji (`ctx.react("👍")`) to provide visual feedback that the message was received and the agent job was triggered. This entire operation is wrapped in a try-catch: if the fetch or the mapper throws, the error is logged to `console.error` and no reaction is sent. Forwarding runs for all message types regardless of whether text is present.
 
 ## The ChatRouterClient
 
@@ -126,7 +122,7 @@ The plugin is designed for graceful degradation at every level:
 
 - **Missing BOT_TOKEN**: The process exits immediately with a clear error message to `console.error`, including instructions to create a `.env` file. Exit code is 1.
 - **Missing CHAT_ROUTER_URL**: The plugin logs `"CHAT_ROUTER_URL not set -- running in standalone mode (echo only)"` and continues without forwarding. This is normal operation, not an error.
-- **Chat router unreachable or returning an error**: The try-catch in the message handler catches the error, logs it via `console.error("  -> Failed to forward to chat-router:", err)`, and continues to the echo step. The bot remains fully operational.
+- **Chat router unreachable or returning an error**: The try-catch in the message handler catches the error, logs it via `console.error("  -> Failed to forward to chat-router:", err)`, and skips the thumbs-up reaction. The bot remains fully operational.
 - **Telegram API failure**: When sending a reply fails, grammY's internal error handling manages the failure.
 - **Graceful shutdown**: The composition root (`index.ts`) registers listeners for `SIGINT` and `SIGTERM` signals. Both call `bot.stop()` to cleanly disconnect from Telegram's long polling.
 
