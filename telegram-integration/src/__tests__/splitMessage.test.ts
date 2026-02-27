@@ -94,4 +94,39 @@ describe("splitMessage", () => {
     expect(result[0]).toBe("a".repeat(4096));
     expect(result[1]).toBe("a");
   });
+
+  // ----- Emoji / surrogate pair safety -----
+
+  it("preserves emoji characters (no U+FFFD replacement)", () => {
+    const maxLength = 10;
+    const text = "Hello 😀😀😀😀😀";
+    const result = splitMessage(text, maxLength);
+
+    for (const chunk of result) {
+      expect(chunk).not.toContain("\uFFFD");
+    }
+    expect(result.join("")).toBe(text);
+  });
+
+  it("splits emoji-only text without corruption", () => {
+    const maxLength = 5;
+    const text = "👍👍👍👍👍👍👍👍";
+    const result = splitMessage(text, maxLength);
+
+    for (const chunk of result) {
+      expect(chunk).not.toContain("\uFFFD");
+    }
+    expect(result.join("")).toBe(text);
+  });
+
+  it("handles mixed text, emojis, and newlines", () => {
+    const maxLength = 20;
+    const text = "Hello 😀\nWorld 🌍\nTest 🚀 done";
+    const result = splitMessage(text, maxLength);
+
+    for (const chunk of result) {
+      expect(chunk).not.toContain("\uFFFD");
+    }
+    expect(result.join("")).toBe(text);
+  });
 });
