@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createBot } from "./bot";
+import { createBot, BotAccessConfig } from "./bot";
 import { ChatRouterClient } from "./chatRouterClient";
 import { ChatRouterWsClient } from "./wsClient";
 import fs from "fs";
@@ -72,7 +72,39 @@ async function main() {
     console.log("CHAT_ROUTER_URL not set — running in standalone mode (echo only)");
   }
 
-  const bot = createBot(token, chatRouter);
+  // ----------------------------------------------------------------------------
+  // Access Control Config Parsing
+  // ----------------------------------------------------------------------------
+
+  const allowedUserIdsStr = process.env.TELEGRAM_ALLOWED_USER_IDS || "";
+  const allowedGroupIdsStr = process.env.TELEGRAM_ALLOWED_GROUP_IDS || "";
+
+  const allowedUserIds = new Set<number>(
+    allowedUserIdsStr
+      .split(",")
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+      .map(Number)
+      .filter((n) => !isNaN(n))
+  );
+
+  const allowedGroupIds = new Set<number>(
+    allowedGroupIdsStr
+      .split(",")
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0)
+      .map(Number)
+      .filter((n) => !isNaN(n))
+  );
+
+  const accessConfig: BotAccessConfig = {
+    allowedUserIds,
+    allowedGroupIds,
+  };
+
+  console.log(`Access control: ${allowedUserIds.size} allowed user IDs, ${allowedGroupIds.size} allowed group IDs`);
+
+  const bot = createBot(token, chatRouter, accessConfig);
 
   // WebSocket client for outbound messages (if chat router is configured)
   let wsClient: ChatRouterWsClient | undefined;
