@@ -53,6 +53,31 @@ The class provides two methods:
 
 **`healthCheck(): Promise<{ ok: boolean }>`** -- Sends a GET request to `/api/health`. On success, it returns the parsed JSON response cast as `{ ok: boolean }`. If the response status is not OK, it throws an `Error` with the message `Chat router health check failed: ${res.status}` (status code only, no response body). This method is available for diagnostic purposes but is not currently called by the bot's message flow.
 
+## The ChatRouterWsClient
+
+The `ChatRouterWsClient` class in `wsClient.ts` manages the bidirectional WebSocket connection to the chat router's `/ws` endpoint for receiving outbound messages. It is constructed with a base URL (e.g., `http://localhost:3100`), a grammY `Bot` instance (for sending messages), and an optional reconnect delay (defaults to 3000ms).
+
+**Connection lifecycle:**
+- On `connect()`, the client converts the base URL to WebSocket protocol (`http://` → `ws://`, `https://` → `wss://`) and establishes a connection to `/ws`.
+- On successful connection, the client logs `"WebSocket connected to chat router"` and listens for message events.
+- On disconnect or error, the client logs the event and schedules a reconnect attempt after the configured delay.
+- On `disconnect()`, the client closes the WebSocket cleanly and clears any pending reconnect timers.
+
+**Message filtering and delivery:**
+- When a message event arrives, the client parses the JSON payload and checks three conditions:
+  - `direction === "out"` (outbound message from chat router)
+  - `platform === "telegram"` (intended for this plugin)
+  - `text != null` (message has text content)
+- If all conditions pass, the client calls `splitMessage(text)` to handle Telegram's 4096-character limit, then sends each chunk via `bot.api.sendMessage(platformChatId, chunk)`.
+- Delivery errors are logged via `console.error` but do not disconnect the WebSocket or halt processing of subsequent messages.
+
+**Dependencies:**
+- The client uses the `ws` library (WebSocket protocol implementation) and `@types/ws` for type definitions.
+- It imports `splitMessage` from `splitMessage.ts` for message chunking.
+- It requires a grammY `Bot` instance to access the Telegram API via `bot.api.sendMessage()`.
+
+The WebSocket client is created and started in `index.ts` when `CHAT_ROUTER_URL` is set, and is stopped during graceful shutdown alongside the bot instance.
+
 ## The Mapper Function
 
 The `mapTelegramToInbound(ctx: Context): InboundMessage` function in `chatRouterClient.ts` converts a grammY Context into the chat router's normalized message format. For the conceptual purpose and categories of transformation, see [The Mapper Pattern](architecture.md#the-mapper-pattern).

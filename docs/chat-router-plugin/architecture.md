@@ -9,9 +9,9 @@ The Telegram plugin runs as its own Node.js process, completely independent of t
 - Multiple plugins (Telegram, Discord, Slack) can run simultaneously, each in its own process, all feeding into the same chat router.
 - If a plugin crashes, the chat router and other plugins continue operating.
 
-The plugin communicates with the chat router exclusively through its REST API. There are no shared dependencies, no shared database, and no in-process imports between the two packages.
+The plugin communicates with the chat router through two channels: inbound messages are sent via REST API (HTTP POST), and outbound messages are received via WebSocket push events. There are no shared dependencies, no shared database, and no in-process imports between the two packages.
 
-The overall architecture is a **multi-process plugin architecture** where each plugin is a standalone process that communicates with the chat router over HTTP. It is not MVC, not event-driven in the pub/sub sense, and not microservices. Within the plugin itself, the internal structure follows the design patterns described below.
+The overall architecture is a **multi-process plugin architecture** where each plugin is a standalone process that communicates with the chat router over HTTP and WebSocket. It is not MVC, and not microservices. The plugin subscribes to real-time push events from the chat router for outbound message delivery. Within the plugin itself, the internal structure follows the design patterns described below.
 
 ## Design Patterns
 
@@ -37,14 +37,18 @@ telegram-integration/
     bot.ts                  -- Factory function createBot(): creates and configures grammY Bot
     chatRouterClient.ts     -- ChatRouterClient class (HTTP client) + mapTelegramToInbound() mapper
                                + InboundMessage interface (locally redeclared)
+    wsClient.ts             -- ChatRouterWsClient class: WebSocket connection for outbound messages
     splitMessage.ts         -- splitMessage() utility: breaks long text at newline boundaries
     __tests__/
       bot.test.ts           -- 3 tests: Bot instance creation, handler registration, empty token
       chatRouterClient.test.ts -- 10 tests: mapper field-by-field validation with mock Context
+      wsClient.test.ts      -- WebSocket client tests
       splitMessage.test.ts  -- 9 tests: edge cases for the splitting algorithm
 ```
 
 ## Data Flow
+
+**Inbound flow (Telegram → Chat Router):**
 
 ```mermaid
 graph LR
@@ -52,27 +56,43 @@ graph LR
     Bot -->|ctx| Mapper["chatRouterClient.ts\nmapTelegramToInbound"]
     Mapper -->|InboundMessage| Client["chatRouterClient.ts\nChatRouterClient"]
     Client -->|HTTP POST /api/messages| CR[Chat Router]
-    Bot -->|msg.text| Split["splitMessage.ts\nsplitMessage"]
-    Split -->|chunks| Bot
-    Bot -->|ctx.reply| TG
     Entry["index.ts\ncomposition root"] -->|creates and wires| Bot
     Entry -->|creates if URL set| Client
 ```
+
+**Outbound flow (Chat Router → Telegram):**
+
+```mermaid
+graph LR
+    CR[Chat Router] -->|WebSocket push| WS["wsClient.ts\nChatRouterWsClient"]
+    WS -->|filter: direction=out, platform=telegram| WS
+    WS -->|text| Split["splitMessage.ts\nsplitMessage"]
+    Split -->|chunks| API["bot.api.sendMessage"]
+    API -->|send| TG[Telegram API]
+```
+
+**Process boundaries:**
 
 ```mermaid
 graph TB
     subgraph "Telegram Plugin Process"
         index.ts --> bot.ts
         bot.ts --> chatRouterClient.ts
+        index.ts --> wsClient.ts
         bot.ts --> splitMessage.ts
+        wsClient.ts --> splitMessage.ts
     end
     subgraph "Chat Router Process"
         REST["REST API<br/>/api/messages"]
+        WS["WebSocket<br/>/ws"]
     end
-    chatRouterClient.ts -->|HTTP| REST
+    chatRouterClient.ts -->|HTTP POST| REST
+    WS -->|push events| wsClient.ts
 ```
 
 ## Message Flow
+
+**Inbound (Telegram → Chat Router):**
 
 When a user sends a message to the Telegram bot:
 
@@ -82,6 +102,18 @@ When a user sends a message to the Telegram bot:
 4. If the message contains text, the handler splits it if necessary and echoes each chunk back as a Telegram reply.
 
 Steps 3 and 4 are failure-independent: if forwarding fails, the echo still happens. However, they execute sequentially -- the echo does not begin until forwarding either completes or fails. See [Message Handler](implementation.md#message-handler) for the full step-by-step behavior.
+
+**Outbound (Chat Router → Telegram):**
+
+When the chat router produces an outbound message:
+
+1. The chat router emits a message event on its WebSocket `/ws` endpoint.
+2. The `ChatRouterWsClient` receives the event and filters for `direction: "out"`, `platform: "telegram"`, and non-null `text`.
+3. If the message passes the filter, the client splits the text if necessary via `splitMessage()`.
+4. Each chunk is delivered to Telegram via `bot.api.sendMessage(chatId, chunk)`.
+5. Delivery errors are logged but do not disconnect the WebSocket; processing continues.
+
+The WebSocket connection is established on plugin startup and reconnects automatically after 3 seconds if disconnected. See [Outbound Message Flow](implementation.md#outbound-message-flow) for implementation details.
 
 ## The Mapper Pattern
 
