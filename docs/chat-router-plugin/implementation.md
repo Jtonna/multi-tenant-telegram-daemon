@@ -15,7 +15,7 @@ The caller (`index.ts`) is responsible for calling `bot.start()` separately, kee
 The only command handler is `/start`, which sends a static welcome message:
 
 > Hello! I'm the multi-tenant Telegram daemon bot.
-> Send me any message and I'll echo it back.
+> Send me any message and it will be forwarded to the chat router.
 >
 > This is a Phase 1 test bot for exploring the Telegram API.
 
@@ -23,7 +23,7 @@ No other commands are registered.
 
 ## Message Handler
 
-When a message arrives, the handler (registered via `bot.on("message", ...)`) executes three steps in order:
+When a message arrives, the handler (registered via `bot.on("message", ...)`) executes two steps in order:
 
 **Step 1 -- Logging**: The handler extracts key fields from the message and logs them to the console in a human-readable aligned format:
 
@@ -37,11 +37,7 @@ When a message arrives, the handler (registered via `bot.on("message", ...)`) ex
 
 The full raw message object is also logged as formatted JSON for exploration purposes. This logging is always active regardless of operating mode.
 
-**Step 2 -- Forwarding**: If a `ChatRouterClient` was provided to the factory function, the handler calls `mapTelegramToInbound(ctx)` to convert the grammY Context into an `InboundMessage`, then calls `chatRouter.ingestMessage(inbound)` to send it to the chat router's REST API. This entire operation is wrapped in a try-catch: if the fetch or the mapper throws, the error is logged to `console.error` and processing continues to step 3. The handler does not inspect the response from the chat router; it only checks that the request succeeded. Forwarding runs for all message types regardless of whether text is present.
-
-**Step 3 -- Echo**: If `msg.text` exists, the handler calls `splitMessage(msg.text)` to break the text into chunks (if necessary), then sends each chunk back via `ctx.reply(chunk)` in a sequential loop. Non-text messages (photos, stickers, etc.) receive no echo reply.
-
-Steps 2 and 3 are sequential (`await` on the forwarding before the echo), but failure-independent: a forwarding failure does not prevent the echo.
+**Step 2 -- Forwarding and Reaction**: If a `ChatRouterClient` was provided to the factory function, the handler calls `mapTelegramToInbound(ctx)` to convert the grammY Context into an `InboundMessage`, then calls `chatRouter.ingestMessage(inbound)` to send it to the chat router's REST API. If ingestion succeeds, the handler reacts to the original message with a thumbs-up emoji (`ctx.react("👍")`) to provide visual feedback that the message was received and the agent job was triggered. This entire operation is wrapped in a try-catch: if the fetch or the mapper throws, the error is logged to `console.error` and no reaction is sent. Forwarding runs for all message types regardless of whether text is present.
 
 ## The ChatRouterClient
 
@@ -52,6 +48,31 @@ The class provides two methods:
 **`ingestMessage(msg: InboundMessage): Promise<unknown>`** -- Sends a POST request to `/api/messages` with the `InboundMessage` as the JSON body (Content-Type: `application/json`). On success, it returns the parsed JSON response via `res.json()`. If the response status is not OK, it reads the response body text and throws an `Error` with the message `Chat router returned ${res.status}: ${body}`.
 
 **`healthCheck(): Promise<{ ok: boolean }>`** -- Sends a GET request to `/api/health`. On success, it returns the parsed JSON response cast as `{ ok: boolean }`. If the response status is not OK, it throws an `Error` with the message `Chat router health check failed: ${res.status}` (status code only, no response body). This method is available for diagnostic purposes but is not currently called by the bot's message flow.
+
+## The ChatRouterWsClient
+
+The `ChatRouterWsClient` class in `wsClient.ts` manages the bidirectional WebSocket connection to the chat router's `/ws` endpoint for receiving outbound messages. It is constructed with a base URL (e.g., `http://localhost:3100`), a grammY `Bot` instance (for sending messages), and an optional reconnect delay (defaults to 3000ms).
+
+**Connection lifecycle:**
+- On `connect()`, the client converts the base URL to WebSocket protocol (`http://` → `ws://`, `https://` → `wss://`) and establishes a connection to `/ws`.
+- On successful connection, the client logs `"WebSocket connected to chat router"` and listens for message events.
+- On disconnect or error, the client logs the event and schedules a reconnect attempt after the configured delay.
+- On `disconnect()`, the client closes the WebSocket cleanly and clears any pending reconnect timers.
+
+**Message filtering and delivery:**
+- When a message event arrives, the client parses the JSON payload and checks three conditions:
+  - `direction === "out"` (outbound message from chat router)
+  - `platform === "telegram"` (intended for this plugin)
+  - `text != null` (message has text content)
+- If all conditions pass, the client calls `splitMessage(text)` to handle Telegram's 4096-character limit, then sends each chunk via `bot.api.sendMessage(platformChatId, chunk)`.
+- Delivery errors are logged via `console.error` but do not disconnect the WebSocket or halt processing of subsequent messages.
+
+**Dependencies:**
+- The client uses the `ws` library (WebSocket protocol implementation) and `@types/ws` for type definitions.
+- It imports `splitMessage` from `splitMessage.ts` for message chunking.
+- It requires a grammY `Bot` instance to access the Telegram API via `bot.api.sendMessage()`.
+
+The WebSocket client is created and started in `index.ts` when `CHAT_ROUTER_URL` is set, and is stopped during graceful shutdown alongside the bot instance.
 
 ## The Mapper Function
 
@@ -101,7 +122,7 @@ The plugin is designed for graceful degradation at every level:
 
 - **Missing BOT_TOKEN**: The process exits immediately with a clear error message to `console.error`, including instructions to create a `.env` file. Exit code is 1.
 - **Missing CHAT_ROUTER_URL**: The plugin logs `"CHAT_ROUTER_URL not set -- running in standalone mode (echo only)"` and continues without forwarding. This is normal operation, not an error.
-- **Chat router unreachable or returning an error**: The try-catch in the message handler catches the error, logs it via `console.error("  -> Failed to forward to chat-router:", err)`, and continues to the echo step. The bot remains fully operational.
+- **Chat router unreachable or returning an error**: The try-catch in the message handler catches the error, logs it via `console.error("  -> Failed to forward to chat-router:", err)`, and skips the thumbs-up reaction. The bot remains fully operational.
 - **Telegram API failure**: When sending a reply fails, grammY's internal error handling manages the failure.
 - **Graceful shutdown**: The composition root (`index.ts`) registers listeners for `SIGINT` and `SIGTERM` signals. Both call `bot.stop()` to cleanly disconnect from Telegram's long polling.
 
