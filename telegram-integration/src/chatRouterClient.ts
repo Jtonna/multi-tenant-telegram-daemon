@@ -56,7 +56,7 @@ export class ChatRouterClient {
   async ingestMessage(msg: InboundMessage): Promise<unknown> {
     const res = await fetch(`${this.baseUrl}/api/messages`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json; charset=utf-8" },
       body: JSON.stringify(msg),
     });
 
