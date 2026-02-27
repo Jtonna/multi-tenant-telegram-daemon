@@ -155,7 +155,7 @@ When `AcsTriggerConfig` is provided to `createServer()`, the `POST /api/messages
 
 **`buildPrompt(entry, routerUrl)`** -- Constructs a single-line prompt: `[ROUTER=<routerUrl>] [PLATFORM=<platform>] [CHAT_ID=<platformChatId>] [IN_REPLY_TO=<entryId>] User message: <text>`. This format allows the headless agent to parse routing context and user input from one line.
 
-**`triggerAcsJob(config, entry)`** -- Checks that the entry has `direction === "in"` and non-empty `text`. Builds the prompt, escapes double quotes, and POSTs to `{acsBaseUrl}/api/jobs/{jobName}/trigger` with JSON body `{ args: "-p \"<prompt>\"" }`. Logs the `run_id` on success or the error on failure. Returns `true`/`false` — never throws.
+**`triggerAcsJob(config, entry)`** -- Checks that the entry has `direction === "in"` and non-empty `text`. Builds the prompt, strips newlines (ACS drops content after `\n`), escapes double quotes, and POSTs to `{acsBaseUrl}/api/jobs/{jobName}/trigger` with JSON body `{ args: "-p \"<prompt>\"" }`. Logs the `run_id` on success or the error on failure. Returns `true`/`false` — never throws.
 
 The trigger is awaited in the API route handler before returning 201. This means downstream clients (e.g., the Telegram plugin) can treat a successful response as confirmation that the agent was invoked.
 
