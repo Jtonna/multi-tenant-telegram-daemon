@@ -39,21 +39,29 @@ export function splitMessage(
       break;
     }
 
-    // Try to find the last newline within the maxLength window
-    const window = remaining.slice(0, maxLength);
+    // Use Array.from to count code points, not UTF-16 code units.
+    // This prevents splitting inside surrogate pairs (emoji).
+    const codePoints = Array.from(remaining);
+
+    if (codePoints.length <= maxLength) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Build the window from code points to avoid splitting surrogate pairs
+    const window = codePoints.slice(0, maxLength).join("");
     const lastNewline = window.lastIndexOf("\n");
 
     let splitAt: number;
     if (lastNewline > 0) {
       // Split at the newline (include the newline in the current chunk)
-      splitAt = lastNewline + 1;
+      chunks.push(window.slice(0, lastNewline + 1));
+      remaining = remaining.slice(lastNewline + 1);
     } else {
-      // No newline found — hard split at maxLength
-      splitAt = maxLength;
+      // No newline found — hard split at maxLength code points
+      chunks.push(window);
+      remaining = remaining.slice(window.length);
     }
-
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
   }
 
   return chunks;
