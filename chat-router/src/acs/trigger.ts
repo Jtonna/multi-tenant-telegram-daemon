@@ -37,8 +37,8 @@ export async function triggerAcsJob(
   const prompt = buildPrompt(entry, config.routerUrl);
   const url = `${config.acsBaseUrl}/api/jobs/${config.jobName}/trigger`;
 
-  // Escape double quotes inside the prompt for the shell argument
-  const escaped = prompt.replace(/"/g, '\\"');
+  // Strip newlines — ACS drops content after \n
+  const escaped = prompt.replace(/\r?\n/g, " ").replace(/"/g, '\\"');
   const body = JSON.stringify({ args: `-p "${escaped}"` });
 
   console.log(`[acs] Triggering ${config.jobName} for entry ${entry.id}...`);
