@@ -1,5 +1,4 @@
 import { Bot, Context } from "grammy";
-import { splitMessage } from "./splitMessage";
 import { ChatRouterClient, mapTelegramToInbound } from "./chatRouterClient";
 
 /**
@@ -18,7 +17,7 @@ export function createBot(token: string, chatRouter?: ChatRouterClient): Bot {
   bot.command("start", async (ctx: Context) => {
     await ctx.reply(
       "Hello! I'm the multi-tenant Telegram daemon bot.\n" +
-        "Send me any message and I'll echo it back.\n\n" +
+        "Send me any message and it will be forwarded to the chat router.\n\n" +
         "This is a Phase 1 test bot for exploring the Telegram API."
     );
   });
@@ -41,22 +40,15 @@ export function createBot(token: string, chatRouter?: ChatRouterClient): Bot {
     console.log(JSON.stringify(msg, null, 2));
     console.log("===========================================\n");
 
-    // Forward to chat router if configured
+    // Forward to chat router if configured — thumbs-up on success
     if (chatRouter) {
       try {
         const inbound = mapTelegramToInbound(ctx);
         await chatRouter.ingestMessage(inbound);
         console.log("  -> Forwarded to chat-router");
+        await ctx.react("👍");
       } catch (err) {
         console.error("  -> Failed to forward to chat-router:", err);
-      }
-    }
-
-    // Echo text messages back, handling long messages with splitting
-    if (msg.text) {
-      const chunks = splitMessage(msg.text);
-      for (const chunk of chunks) {
-        await ctx.reply(chunk);
       }
     }
   });

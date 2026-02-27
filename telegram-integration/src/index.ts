@@ -2,6 +2,38 @@ import "dotenv/config";
 import { createBot } from "./bot";
 import { ChatRouterClient } from "./chatRouterClient";
 import { ChatRouterWsClient } from "./wsClient";
+import fs from "fs";
+import path from "path";
+import util from "util";
+
+// ----------------------------------------------------------------------------
+// File logging setup
+// ----------------------------------------------------------------------------
+
+const logsDir = path.join(__dirname, "..", "logs");
+fs.mkdirSync(logsDir, { recursive: true });
+
+const logFilePath = path.join(logsDir, "telegram-plugin.log");
+const logStream = fs.createWriteStream(logFilePath, { flags: "a" });
+
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+
+console.log = (...args: any[]) => {
+  const timestamp = new Date().toISOString();
+  const message = util.format(...args);
+  logStream.write(`[${timestamp}] [LOG] ${message}\n`);
+  originalConsoleLog(...args);
+};
+
+console.error = (...args: any[]) => {
+  const timestamp = new Date().toISOString();
+  const message = util.format(...args);
+  logStream.write(`[${timestamp}] [ERROR] ${message}\n`);
+  originalConsoleError(...args);
+};
+
+// ----------------------------------------------------------------------------
 
 async function main() {
   const token = process.env.BOT_TOKEN;
