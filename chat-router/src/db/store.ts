@@ -56,6 +56,12 @@ export class ChatRouterStore {
 
     this.db = new Database(this.dbPath);
 
+    // Verify database uses UTF-8 encoding for emoji and Unicode support
+    const encoding = this.db.pragma("encoding", { simple: true });
+    if (encoding !== "UTF-8") {
+      throw new Error(`Database encoding is "${encoding}", expected "UTF-8"`);
+    }
+
     // Enable WAL mode for file-based databases for better concurrency.
     if (this.dbPath !== ":memory:") {
       this.db.pragma("journal_mode = WAL");
