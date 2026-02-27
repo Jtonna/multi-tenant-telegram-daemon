@@ -2,9 +2,9 @@
 
 ## Overview
 
-The Telegram integration is a platform-specific plugin for the MTTD (Multi-Tenant Telegram Daemon) system. It serves as the bridge between Telegram and the chat router -- connecting to the Telegram Bot API on one side and the chat router's normalized REST API on the other. Each plugin runs as its own process and communicates with the chat router over HTTP.
+The Telegram integration is a platform-specific plugin for the MTTD (Multi-Tenant Telegram Daemon) system. It serves as the bridge between Telegram and the chat router -- connecting to the Telegram Bot API on one side and the chat router's REST API and WebSocket endpoint on the other. Each plugin runs as its own process and communicates with the chat router via HTTP (for inbound messages) and WebSocket (for outbound messages).
 
-The plugin is currently in its Phase 1 state: a working Telegram bot that receives real messages, optionally forwards them to the chat router, and echoes text back. It is the first of potentially many platform plugins (Discord, Slack, web, etc.). See [Architecture](architecture.md) for details on how the pieces fit together.
+The plugin supports bidirectional communication: inbound messages from Telegram are forwarded to the chat router via REST POST, and outbound messages from the chat router are received via WebSocket push events and delivered to Telegram. It is the first of potentially many platform plugins (Discord, Slack, web, etc.). See [Architecture](architecture.md) for details on how the pieces fit together.
 
 ## Documentation
 
