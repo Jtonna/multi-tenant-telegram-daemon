@@ -6,9 +6,9 @@
     instructions — do not read all behavior files upfront.
   </purpose>
 
-  <behavior name="git-with-beads" file="behaviors/git-with-beads.xml">
+  <behavior name="git-conventions" file="behaviors/git-conventions.xml">
     Branching strategies (trunk-based, feature branching), branch naming conventions,
-    commit message format, push discipline, and beads issue-type integration.
+    commit message format, and push discipline.
   </behavior>
 
   <behavior name="escalation" file="behaviors/escalation.xml">
@@ -22,7 +22,7 @@
   </behavior>
 
   <behavior name="sub-task-tracking" file="behaviors/sub-task-tracking.xml">
-    Post and update sub-task progress as structured comments on beads tickets.
+    Post and update sub-task progress as structured comments on GitHub issues.
     Timeline of progress preserved as sequential comments.
   </behavior>
 
@@ -62,6 +62,11 @@
     Protocol for waiting on CI/CD status checks after a pull request is created.
     Covers how to poll for check results, interpret outcomes, and structure reports
     for passed, failed, and no-checks-configured scenarios.
+  </behavior>
+
+  <behavior name="autonomous-nightly" file="behaviors/autonomous-nightly.xml">
+    How to assess whether a ticket has enough information for autonomous execution,
+    how to request clarification when it does not, and PR merge rules for autonomous work.
   </behavior>
 
 </behaviors-manifest>

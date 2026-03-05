@@ -1,0 +1,150 @@
+<lifecycle name="NIGHTLY_AUTONOMOUS_RUN">
+
+  <summary>
+    On-demand pre-flight gate for GitHub issues labeled autonomously-nightly. Scans
+    open issues, assesses completeness, then either activates autonomous mode on the
+    standard workflow or posts clarifying questions via the comment queue and exits.
+  </summary>
+
+  <uses-behavior name="autonomous-nightly" />
+  <uses-behavior name="response-format" lifecycle="NIGHTLY_AUTONOMOUS_RUN" />
+
+  <loop>
+    <!--
+      [START]
+          |
+          v
+      [Phase 1: DETECT]
+          |
+          +~~ no GitHub issues labeled autonomously-nightly ~~> [EXIT — nothing to process]
+          |
+          +~~ command failure ~~> [EXIT — report error]
+          |
+          +~~ issue found, OPEN ~~> [Phase 2: ASSESS]
+          |
+          +~~ issue found, CLOSED ~~> read GitHub comments
+          |       |
+          |       +~~ follow-up work found ~~> create new issue, [Phase 2: ASSESS]
+          |       |
+          |       +~~ no follow-up ~~> remove label, [EXIT — work already done]
+
+      [Phase 2: ASSESS]
+          |
+          +~~ INCOMPLETE ~~> [Phase 3: ROUTE_INCOMPLETE] ~~> [EXIT — questions posted]
+          |
+          +~~ COMPLETE ~~> [Phase 4: ROUTE_COMPLETE] ~~> [ENTRY lifecycle, autonomous mode]
+    -->
+
+    <phase name="DETECT" order="1">
+      <actor>Orchestrator (reasoning tier)</actor>
+      <actions>
+        <action>
+          Query GitHub for open issues labeled "autonomously-nightly":
+            gh issue list --label "autonomously-nightly" --state open --json number,title,body,labels,createdAt --limit 20
+          If the command fails, report the error and exit.
+          If no issues are returned, report that no issues are labeled for nightly processing and exit.
+        </action>
+        <action>
+          Select the oldest issue by createdAt (one-at-a-time processing).
+          Store the issue number, title, and body for subsequent phases.
+        </action>
+        <action>
+          Check the issue state. If the issue is OPEN, proceed to ASSESS.
+        </action>
+        <action>
+          If the issue is CLOSED (all work done):
+            Read the GitHub issue comments to check for follow-up work:
+              gh issue view {number} --json comments --jq '.comments[].body'
+            Scan the comments for:
+              - New feature requests or enhancements beyond the original scope
+              - Bug reports or issues with the completed work
+              - Explicit requests for additional changes
+              - Review feedback that requires code changes
+            Ignore:
+              - Bot comments, CI status updates
+              - Comments that are purely informational or acknowledgments
+              - Comments that predate the issue's close date
+        </action>
+        <action>
+          If follow-up work IS found in the comments:
+            Create a new GitHub issue for the follow-up work:
+              gh issue create --title "Follow-up: {original title}" --body "{follow-up description}" --label "autonomously-nightly"
+            Proceed to ASSESS with the new issue.
+        </action>
+        <action>
+          If NO follow-up work is found (issue is closed, work is done):
+            Remove the "autonomously-nightly" label so the issue is not picked up again:
+              gh issue edit {number} --remove-label "autonomously-nightly"
+            Report that the issue was cleaned up and exit.
+        </action>
+      </actions>
+      <on-success>Issue found — proceed to ASSESS.</on-success>
+      <on-failure>Exit — no labeled issues found or command error.</on-failure>
+    </phase>
+
+    <phase name="ASSESS" order="2">
+      <actor>Orchestrator (reasoning tier)</actor>
+      <actions>
+        <action>
+          Apply the autonomous-nightly behavior's ticket-assessment rules to the
+          issue content retrieved in DETECT.
+        </action>
+        <action>
+          Determine whether the issue has sufficient information for autonomous
+          execution. Produce a verdict: COMPLETE or INCOMPLETE.
+        </action>
+      </actions>
+      <on-success>
+        If COMPLETE, proceed to ROUTE_COMPLETE.
+        If INCOMPLETE, proceed to ROUTE_INCOMPLETE.
+      </on-success>
+      <on-failure>Exit and report the assessment failure.</on-failure>
+    </phase>
+
+    <phase name="ROUTE_INCOMPLETE" order="3">
+      <actor>Orchestrator (reasoning tier)</actor>
+      <actions>
+        <action>
+          Apply the autonomous-nightly behavior's insufficient-information rules:
+          formulate questions, then write them to the comment queue file
+          (.github/comment-queue.json) so they appear as github-actions[bot]
+          on the next push.
+        </action>
+      </actions>
+      <on-success>Exit — questions queued, no further action.</on-success>
+      <on-failure>Report the failure to post questions and exit.</on-failure>
+    </phase>
+
+    <phase name="ROUTE_COMPLETE" order="4">
+      <actor>Orchestrator (reasoning tier)</actor>
+      <actions>
+        <action>
+          Activate autonomous mode — all human gates in the standard workflow
+          are auto-approved for this issue. The following configuration is
+          pre-set and not prompted:
+          - Scope: single issue (current issue only).
+          - Docs phase: run normally (scout, audit if needed, auto-approve changes).
+        </action>
+        <action>
+          Apply the autonomous-nightly behavior's pr-merge-rules for PR handling.
+        </action>
+        <action>
+          Log the autonomous mode activation in the status output.
+        </action>
+        <note>
+          Activating autonomous mode also activates sub-agent dispatch mode
+          for IMPLEMENTATION (see CLAUDE.md dispatch-mode). Agent Teams will
+          not be used — all implementation sub-tasks use blocking Task calls.
+        </note>
+      </actions>
+      <on-success>
+        Proceed to the standard ENTRY lifecycle flow. The standard sequence
+        (ENTRY branch setup, PLANNING, IMPLEMENTATION, DOCS, PR) runs with
+        all human gates auto-approved.
+      </on-success>
+      <on-failure>Report the failure and exit. Do not proceed to the standard workflow.</on-failure>
+    </phase>
+
+  </loop>
+
+</lifecycle>
